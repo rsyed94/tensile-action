@@ -1,0 +1,83 @@
+name: Jiffy node:test recorder
+description: Record which functions and files each node:test test file uses, around an unchanged test command.
+author: Jiffy
+
+# - uses: rsyed94/tensile-action/node-test@v1    # before the test step
+#   id: jiffy
+#   with: { step: setup }
+# - run: npm test                           # node --test, tsx --test, c8 ...: unchanged
+#   env:
+#     NODE_OPTIONS: ${{ steps.jiffy.outputs.node-options }}
+# - uses: rsyed94/tensile-action/node-test@v1    # after it
+#   if: ${{ !cancelled() }}
+#   with: { step: collect }
+#
+# GitHub refuses NODE_OPTIONS in $GITHUB_ENV, so the test step sets it from the node-options output (which keeps
+# any NODE_OPTIONS the job already had). To add flags: NODE_OPTIONS: ${{ steps.jiffy.outputs.node-options }} --x.
+# collect writes .jiffy/coverage-node-test.json and .jiffy/report-node-test.json for the Jiffy upload.
+# Linux and macOS runners.
+
+inputs:
+  step:
+    description: setup (before the tests) or collect (after them).
+    required: true
+  root:
+    description: Repository root that records are relative to.
+    required: false
+    default: ''
+  out-dir:
+    description: Where collect writes coverage-node-test.json and report-node-test.json.
+    required: false
+    default: .jiffy
+
+outputs:
+  node-options:
+    description: NODE_OPTIONS for the test step (the job's own NODE_OPTIONS plus the recorder's preload).
+    value: ${{ steps.setup.outputs.node-options }}
+
+runs:
+  using: composite
+  steps:
+    - name: Jiffy node:test setup
+      id: setup
+      if: inputs.step == 'setup'
+      shell: bash
+      env:
+        ROOT: ${{ inputs.root || github.workspace }}
+      run: |
+        set -euo pipefail
+        # Without recording, the output keeps the job's own NODE_OPTIONS so the test step is unchanged.
+        echo "node-options=${NODE_OPTIONS:-}" >> "$GITHUB_OUTPUT"
+        if ! ROOT=$(cd "$ROOT" 2>/dev/null && pwd); then
+          echo "::warning::jiffy: root $ROOT doesn't exist; not recording"; exit 0
+        fi
+        case "$GITHUB_ACTION_PATH" in *[[:space:]\"\'\\]*)
+          echo "::warning::jiffy: the action path has spaces or quotes, which NODE_OPTIONS can't carry; not recording"; exit 0;;
+        esac
+        dir="$RUNNER_TEMP/jiffy-node-test"
+        rm -rf "$dir" && mkdir -p "$dir"
+        {
+          echo "JIFFY_NODE_TEST_DIR=$dir"
+          echo "JIFFY_ROOT=$ROOT"
+          echo "JIFFY_NODE_OPTIONS_BEFORE=${NODE_OPTIONS:-}"
+        } >> "$GITHUB_ENV"
+        echo "node-options=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$GITHUB_ACTION_PATH/preload.mjs" >> "$GITHUB_OUTPUT"
+    - name: Jiffy node:test collect
+      if: inputs.step == 'collect'
+      shell: bash
+      env:
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        set -euo pipefail
+        if [ -n "${JIFFY_NODE_TEST_DIR:-}" ] && [ -z "$(ls -A "$JIFFY_NODE_TEST_DIR" 2>/dev/null)" ]; then
+          echo "::warning::jiffy: the recorder never loaded; set the test step's NODE_OPTIONS to the setup step's node-options output"
+        fi
+        NODE_OPTIONS="${JIFFY_NODE_OPTIONS_BEFORE:-}" node "$GITHUB_ACTION_PATH/collect.mjs" --out-dir "$OUT_DIR" ||
+          echo "::warning::jiffy: node:test collect failed; no coverage part"
+        if [ -n "${JIFFY_NODE_TEST_DIR:-}" ]; then echo "JIFFY_NODE_TEST_DIR=" >> "$GITHUB_ENV"; fi
+    - name: Unknown step
+      if: inputs.step != 'setup' && inputs.step != 'collect'
+      shell: bash
+      run: |
+        echo "::error::jiffy node-test: step must be setup or collect"
+        exit 1

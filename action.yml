@@ -1,0 +1,115 @@
+name: Jiffy gate
+description: Decide which tests and matrix combinations this push runs. Fails closed to running everything.
+author: Jiffy
+
+inputs:
+  map:
+    description: Coverage map (.bin.gz) as a path or an http(s) URL. Missing, unreadable or stale -> run everything.
+    required: false
+    default: ''
+  base:
+    description: Git revision to diff against (merge-based with HEAD). Default from the event (PR base, or the default branch on pushes).
+    required: false
+    default: ''
+  durations:
+    description: 'Vitest/Jest JSON report or {"file": seconds} JSON. Defines the full test list and balances shards.'
+    required: false
+    default: ''
+  mode:
+    description: report (default; everything still runs, the summary shows what would be skipped) or enforce.
+    required: false
+    default: report
+  matrix:
+    description: Strategy matrix as JSON. Pruned to one combination per push; full on merge_group and default-branch pushes.
+    required: false
+    default: ''
+  shards:
+    description: Number of shards to balance the selected tests across.
+    required: false
+    default: '1'
+  run-all:
+    description: Kill switch. Anything other than false/0/empty runs everything (so does env JIFFY_RUN_ALL).
+    required: false
+    default: 'false'
+  max-map-age-days:
+    description: Maps recorded longer ago than this are stale and run everything. 0 turns the check off.
+    required: false
+    default: '14'
+  timeout-seconds:
+    description: Time budget for the decision; past it, everything runs.
+    required: false
+    default: '60'
+  sample-rate:
+    description: 'Share of skipped tests that run anyway as a check (R14), like 5% or 0.05; at least one when anything is skipped. Seeded by the commit. 0 turns it off.'
+    required: false
+    default: '5%'
+  quarantine:
+    description: 'Quarantine list (`jiffy flaky list --json`, or the state file) of flaky tests (R13). On pushes that select, quarantined test files go to the quarantined output instead of tests, to run apart from the fast check; never at merge. Unreadable means quarantine nothing.'
+    required: false
+    default: ''
+  always:
+    description: Test path prefixes that are never skipped, one per line or comma-separated (e.g. the selector's own tests).
+    required: false
+    default: ''
+  decision-file:
+    description: "Also write the decision (the service's DecisionPayload: selected with reasons, sampled, skipped) to this JSON file, for later steps such as `jiffy misses`."
+    required: false
+    default: ''
+  service-url:
+    description: 'Jiffy service (https). When set, the map (unless `map` is given) and the kill switch come from it and every decision is posted to it, authenticated with an OIDC token (needs `permissions: id-token: write`). Any service failure runs everything.'
+    required: false
+    default: ''
+  working-directory:
+    description: Git checkout to diff. Default the workspace.
+    required: false
+    default: ''
+  evidence:
+    description: 'What the step does: false (default) runs the gate; start begins the evidence job (right after checkout, before the install: writes a placeholder record and reads git); true runs the evidence step after the install (needs no permissions or secrets; writes the file in the `file` output for an artifact); upload sends those artifacts to `service-url` (the jiffy-upload job, with id-token: write).'
+    required: false
+    default: 'false'
+  matrix-key:
+    description: "Evidence step: the job's matrix, as toJSON(matrix) in an expression, so each leg writes its own file."
+    required: false
+    default: ''
+  evidence-dir:
+    description: 'Evidence step: where to write the file (default $RUNNER_TEMP/jiffy-evidence). Upload: where the downloaded artifacts are (default jiffy-evidence).'
+    required: false
+    default: ''
+  token:
+    description: "Evidence start: a token for its git fetches (the default branch's jiffy.yml), for a checkout with persist-credentials: false. Pass github.token to this step only; no other step needs it."
+    required: false
+    default: ''
+  evidence-sha256:
+    description: "Upload: the evidence job's sha256 output (or 'none'). Each evidence file must match it, or it isn't uploaded and Jiffy shows that evidence as unavailable. Unset, files are uploaded unchecked."
+    required: false
+    default: ''
+
+outputs:
+  run-all:
+    description: "'true' or 'false'. Treat anything other than 'false' (including empty) as true."
+  reason:
+    description: Why everything runs, when it does.
+  tests:
+    description: Test files to run (selected plus sampled) as a JSON array; empty when run-all.
+  tests-lines:
+    description: The same test files as tests (selected plus sampled), one per line.
+  sampled:
+    description: Skipped tests that run anyway as a check (R14), as a JSON array. They are also in tests and shards; a failure among them is a miss.
+  quarantined:
+    description: Quarantined test files (R13) to run apart from the fast check, as a JSON array; not in tests. Under run-all, exclude them from the main run. Always [] at merge.
+  shards:
+    description: 'JSON array of {index, total, label, tests, seconds}, label like "1/4". Under run-all tests is empty: shard with the runner''s --shard=label.'
+  matrix:
+    description: 'The matrix to run as JSON: one combination in axes form ({"os": ["ubuntu-latest"]}) or the full input.'
+  file:
+    description: 'Evidence step: absolute path of the jiffy-evidence-<job>-<matrix>.json it wrote; empty when it skipped (not a pull request, or one from a fork).'
+  artifact:
+    description: 'Evidence step: the artifact name to upload the file under; empty when it skipped.'
+  status:
+    description: 'Evidence step: the advisory status (the service recomputes it), or skipped / unavailable.'
+  sha256:
+    description: "Evidence start and step: the sha256 of the file as last written. Expose it as a job output for the upload's evidence-sha256."
+
+runs:
+  using: node24
+  main: dist/index.js
