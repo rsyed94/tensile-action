@@ -3071,8 +3071,8 @@ var require_typescript = __commonJS({
       function getAllKeys(obj) {
         const result = [];
         do {
-          const names = Object.getOwnPropertyNames(obj);
-          for (const name2 of names) {
+          const names2 = Object.getOwnPropertyNames(obj);
+          for (const name2 of names2) {
             pushIfUnique(result, name2);
           }
         } while (obj = Object.getPrototypeOf(obj));
@@ -16913,11 +16913,11 @@ ${lanes.join("\n")}
       function typeDirectiveIsEqualTo(oldResolution, newResolution) {
         return oldResolution === newResolution || oldResolution.resolvedTypeReferenceDirective === newResolution.resolvedTypeReferenceDirective || !!oldResolution.resolvedTypeReferenceDirective && !!newResolution.resolvedTypeReferenceDirective && oldResolution.resolvedTypeReferenceDirective.resolvedFileName === newResolution.resolvedTypeReferenceDirective.resolvedFileName && !!oldResolution.resolvedTypeReferenceDirective.primary === !!newResolution.resolvedTypeReferenceDirective.primary && oldResolution.resolvedTypeReferenceDirective.originalPath === newResolution.resolvedTypeReferenceDirective.originalPath;
       }
-      function hasChangesInResolutions(names, newResolutions, getOldResolution, comparer) {
-        Debug.assert(names.length === newResolutions.length);
-        for (let i2 = 0; i2 < names.length; i2++) {
+      function hasChangesInResolutions(names2, newResolutions, getOldResolution, comparer) {
+        Debug.assert(names2.length === newResolutions.length);
+        for (let i2 = 0; i2 < names2.length; i2++) {
           const newResolution = newResolutions[i2];
-          const entry = names[i2];
+          const entry = names2[i2];
           const oldResolution = getOldResolution(entry);
           const changed = oldResolution ? !newResolution || !comparer(oldResolution, newResolution) : newResolution;
           if (changed) {
@@ -67161,28 +67161,28 @@ ${lanes.join("\n")}
             return concatenate(sig.parameters.slice(0, restIndex), restParams);
           }
           function getUniqAssociatedNamesFromTupleType(type, restSymbol) {
-            const names = map(type.target.labeledElementDeclarations, (labeledElement, i2) => getTupleElementLabel(labeledElement, i2, type.target.elementFlags[i2], restSymbol));
-            if (names) {
+            const names2 = map(type.target.labeledElementDeclarations, (labeledElement, i2) => getTupleElementLabel(labeledElement, i2, type.target.elementFlags[i2], restSymbol));
+            if (names2) {
               const duplicates = [];
               const uniqueNames = /* @__PURE__ */ new Set();
-              for (let i2 = 0; i2 < names.length; i2++) {
-                const name2 = names[i2];
+              for (let i2 = 0; i2 < names2.length; i2++) {
+                const name2 = names2[i2];
                 if (!tryAddToSet(uniqueNames, name2)) {
                   duplicates.push(i2);
                 }
               }
               const counters = /* @__PURE__ */ new Map();
               for (const i2 of duplicates) {
-                let counter = counters.get(names[i2]) ?? 1;
+                let counter = counters.get(names2[i2]) ?? 1;
                 let name2;
-                while (!tryAddToSet(uniqueNames, name2 = `${names[i2]}_${counter}`)) {
+                while (!tryAddToSet(uniqueNames, name2 = `${names2[i2]}_${counter}`)) {
                   counter++;
                 }
-                names[i2] = name2;
-                counters.set(names[i2], counter + 1);
+                names2[i2] = name2;
+                counters.set(names2[i2], counter + 1);
               }
             }
-            return names;
+            return names2;
           }
         }
         function getDefaultConstructSignatures(classType) {
@@ -77712,15 +77712,15 @@ ${lanes.join("\n")}
         }
         function getPropertiesOfContext(context) {
           if (!context.resolvedProperties) {
-            const names = /* @__PURE__ */ new Map();
+            const names2 = /* @__PURE__ */ new Map();
             for (const t of getSiblingsOfContext(context)) {
               if (isObjectLiteralType2(t) && !(getObjectFlags(t) & 2097152)) {
                 for (const prop of getPropertiesOfType(t)) {
-                  names.set(prop.escapedName, prop);
+                  names2.set(prop.escapedName, prop);
                 }
               }
             }
-            context.resolvedProperties = arrayFrom(names.values());
+            context.resolvedProperties = arrayFrom(names2.values());
           }
           return context.resolvedProperties;
         }
@@ -86367,7 +86367,7 @@ ${lanes.join("\n")}
           }
           const types = [];
           const flags2 = [];
-          const names = [];
+          const names2 = [];
           for (let i2 = index; i2 < argCount; i2++) {
             const arg = args2[i2];
             if (isSpreadArgument(arg)) {
@@ -86405,12 +86405,12 @@ ${lanes.join("\n")}
               );
             }
             if (arg.kind === 238 && arg.tupleNameSource) {
-              names.push(arg.tupleNameSource);
+              names2.push(arg.tupleNameSource);
             } else {
-              names.push(void 0);
+              names2.push(void 0);
             }
           }
-          return createTupleType(types, flags2, inConstContext && !someType(restType, isMutableArrayLikeType), names);
+          return createTupleType(types, flags2, inConstContext && !someType(restType, isMutableArrayLikeType), names2);
         }
         function checkTypeArguments(signature, typeArgumentNodes, reportErrors2, headMessage) {
           const isJavascript = isInJSFile(signature.declaration);
@@ -88811,7 +88811,7 @@ ${lanes.join("\n")}
           }
           const types = [];
           const flags2 = [];
-          const names = [];
+          const names2 = [];
           for (let i2 = pos; i2 < parameterCount; i2++) {
             if (!restType || i2 < parameterCount - 1) {
               types.push(getTypeAtPosition(source, i2));
@@ -88826,9 +88826,9 @@ ${lanes.join("\n")}
                 /* Variadic */
               );
             }
-            names.push(getNameableDeclarationAtPosition(source, i2));
+            names2.push(getNameableDeclarationAtPosition(source, i2));
           }
-          return createTupleType(types, flags2, readonly, names);
+          return createTupleType(types, flags2, readonly, names2);
         }
         function getRestOrAnyTypeAtPosition(source, pos) {
           const restType = getRestTypeAtPosition(source, pos);
@@ -92290,28 +92290,28 @@ ${lanes.join("\n")}
               }
               const isPrivate = isPrivateIdentifier(name2);
               const privateStaticFlags = isPrivate && isStaticMember ? 16 : 0;
-              const names = isPrivate ? privateIdentifiers : isStaticMember ? staticNames : instanceNames;
+              const names2 = isPrivate ? privateIdentifiers : isStaticMember ? staticNames : instanceNames;
               const memberName = name2 && getEffectivePropertyNameForPropertyNameNode(name2);
               if (memberName) {
                 switch (member.kind) {
                   case 178:
-                    addName(names, name2, memberName, 1 | privateStaticFlags);
+                    addName(names2, name2, memberName, 1 | privateStaticFlags);
                     break;
                   case 179:
-                    addName(names, name2, memberName, 2 | privateStaticFlags);
+                    addName(names2, name2, memberName, 2 | privateStaticFlags);
                     break;
                   case 173:
-                    addName(names, name2, memberName, 3 | privateStaticFlags);
+                    addName(names2, name2, memberName, 3 | privateStaticFlags);
                     break;
                   case 175:
-                    addName(names, name2, memberName, 8 | privateStaticFlags);
+                    addName(names2, name2, memberName, 8 | privateStaticFlags);
                     break;
                 }
               }
             }
           }
-          function addName(names, location, name2, meaning) {
-            const prev = names.get(name2);
+          function addName(names2, location, name2, meaning) {
+            const prev = names2.get(name2);
             if (prev) {
               if ((prev & 16) !== (meaning & 16)) {
                 error2(location, Diagnostics.Duplicate_identifier_0_Static_and_instance_elements_cannot_share_the_same_private_name, getTextOfNode(location));
@@ -92325,11 +92325,11 @@ ${lanes.join("\n")}
                 } else if (prev & meaning & ~16) {
                   error2(location, Diagnostics.Duplicate_identifier_0, getTextOfNode(location));
                 } else {
-                  names.set(name2, prev | meaning);
+                  names2.set(name2, prev | meaning);
                 }
               }
             } else {
-              names.set(name2, meaning);
+              names2.set(name2, meaning);
             }
           }
         }
@@ -92358,7 +92358,7 @@ ${lanes.join("\n")}
           }
         }
         function checkObjectTypeForDuplicateDeclarations(node) {
-          const names = /* @__PURE__ */ new Map();
+          const names2 = /* @__PURE__ */ new Map();
           for (const member of node.members) {
             if (member.kind === 172) {
               let memberName;
@@ -92374,11 +92374,11 @@ ${lanes.join("\n")}
                 default:
                   continue;
               }
-              if (names.get(memberName)) {
+              if (names2.get(memberName)) {
                 error2(getNameOfDeclaration(member.symbol.valueDeclaration), Diagnostics.Duplicate_identifier_0, memberName);
                 error2(member.name, Diagnostics.Duplicate_identifier_0, memberName);
               } else {
-                names.set(memberName, true);
+                names2.set(memberName, true);
               }
             }
           }
@@ -104253,7 +104253,7 @@ ${lanes.join("\n")}
         var sources = [];
         var sourceToSourceIndexMap = /* @__PURE__ */ new Map();
         var sourcesContent;
-        var names = [];
+        var names2 = [];
         var nameToNameIndexMap;
         var mappingCharCodes = [];
         var mappings = "";
@@ -104319,8 +104319,8 @@ ${lanes.join("\n")}
           if (!nameToNameIndexMap) nameToNameIndexMap = /* @__PURE__ */ new Map();
           let nameIndex = nameToNameIndexMap.get(name2);
           if (nameIndex === void 0) {
-            nameIndex = names.length;
-            names.push(name2);
+            nameIndex = names2.length;
+            names2.push(name2);
             nameToNameIndexMap.set(name2, nameIndex);
           }
           exit();
@@ -104469,7 +104469,7 @@ ${lanes.join("\n")}
             file,
             sourceRoot,
             sources,
-            names,
+            names: names2,
             mappings,
             sourcesContent
           };
@@ -113684,13 +113684,13 @@ ${lanes.join("\n")}
             functionFlags & 2 ? transformAsyncFunctionBody(node, parameters) : visitFunctionBody(node.body, visitor, context)
           );
         }
-        function recordDeclarationName({ name: name2 }, names) {
+        function recordDeclarationName({ name: name2 }, names2) {
           if (isIdentifier(name2)) {
-            names.add(name2.escapedText);
+            names2.add(name2.escapedText);
           } else {
             for (const element of name2.elements) {
               if (!isOmittedExpression(element)) {
-                recordDeclarationName(element, names);
+                recordDeclarationName(element, names2);
               }
             }
           }
@@ -114169,14 +114169,14 @@ ${lanes.join("\n")}
           }
         }
       }
-      function createSuperAccessVariableStatement(factory2, resolver, node, names) {
+      function createSuperAccessVariableStatement(factory2, resolver, node, names2) {
         const hasBinding = resolver.hasNodeCheckFlag(
           node,
           256
           /* MethodWithSuperPropertyAssignmentInAsync */
         );
         const accessors = [];
-        names.forEach((_, key) => {
+        names2.forEach((_, key) => {
           const name2 = unescapeLeadingUnderscores(key);
           const getterAndSetter = [];
           getterAndSetter.push(factory2.createPropertyAssignment(
@@ -152480,14 +152480,14 @@ ${lanes.join("\n")}
             }
             const isDefault = exportKind === 1;
             const namedSymbol = isDefault && getLocalSymbolForExportDefault(symbol) || symbol;
-            const names = exportKind === 0 || isExternalModuleSymbol(namedSymbol) ? unescapeLeadingUnderscores(symbolTableKey) : getNamesForExportedSymbol(
+            const names2 = exportKind === 0 || isExternalModuleSymbol(namedSymbol) ? unescapeLeadingUnderscores(symbolTableKey) : getNamesForExportedSymbol(
               namedSymbol,
               checker,
               /*scriptTarget*/
               void 0
             );
-            const symbolName2 = typeof names === "string" ? names : names[0];
-            const capitalizedSymbolName = typeof names === "string" ? void 0 : names[1];
+            const symbolName2 = typeof names2 === "string" ? names2 : names2[0];
+            const capitalizedSymbolName = typeof names2 === "string" ? void 0 : names2[1];
             const moduleName = stripQuotes(moduleSymbol.name);
             const id = exportInfoId++;
             const target = skipAlias(symbol, checker);
@@ -152861,12 +152861,12 @@ ${lanes.join("\n")}
         return !checker.isUndefinedSymbol(symbol) && !checker.isUnknownSymbol(symbol) && !isKnownSymbol(symbol) && !isPrivateIdentifierSymbol(symbol);
       }
       function getNamesForExportedSymbol(defaultExport, checker, scriptTarget) {
-        let names;
+        let names2;
         forEachNameOfDefaultExport(defaultExport, checker, scriptTarget, (name2, capitalizedName) => {
-          names = capitalizedName ? [name2, capitalizedName] : name2;
+          names2 = capitalizedName ? [name2, capitalizedName] : name2;
           return true;
         });
-        return Debug.checkDefined(names);
+        return Debug.checkDefined(names2);
       }
       function forEachNameOfDefaultExport(defaultExport, checker, scriptTarget, cb) {
         let chain2;
@@ -156180,20 +156180,20 @@ interface Symbol {
         for (let i2 = 0; i2 < depth; i2++) endNode();
       }
       function startNestedNodes(targetNode, entityName) {
-        const names = [];
+        const names2 = [];
         while (!isPropertyNameLiteral(entityName)) {
           const name2 = getNameOrArgument(entityName);
           const nameText = getElementOrPropertyAccessName(entityName);
           entityName = entityName.expression;
           if (nameText === "prototype" || isPrivateIdentifier(name2)) continue;
-          names.push(name2);
+          names2.push(name2);
         }
-        names.push(entityName);
-        for (let i2 = names.length - 1; i2 > 0; i2--) {
-          const name2 = names[i2];
+        names2.push(entityName);
+        for (let i2 = names2.length - 1; i2 > 0; i2--) {
+          const name2 = names2[i2];
           startNode(targetNode, name2);
         }
-        return [names.length - 1, names[0]];
+        return [names2.length - 1, names2[0]];
       }
       function startNode(node, name2) {
         const navNode = emptyNavigationBarNode(node, name2);
@@ -158284,8 +158284,8 @@ interface Symbol {
         if (useEs6Exports) {
           if (!isExpressionStatement(decl)) changes.insertExportModifier(sourceFile, decl);
         } else {
-          const names = getNamesToExportInCommonJS(decl);
-          if (names.length !== 0) changes.insertNodesAfter(sourceFile, decl, names.map(createExportAssignment));
+          const names2 = getNamesToExportInCommonJS(decl);
+          if (names2.length !== 0) changes.insertNodesAfter(sourceFile, decl, names2.map(createExportAssignment));
         }
       }
       function createNewFileName(oldFile, program, host, toMove) {
@@ -159533,10 +159533,10 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
       function getGroupedReferences(functionDeclaration, program, cancellationToken) {
         const functionNames = getFunctionNames(functionDeclaration);
         const classNames = isConstructorDeclaration(functionDeclaration) ? getClassNames(functionDeclaration) : [];
-        const names = deduplicate([...functionNames, ...classNames], equateValues);
+        const names2 = deduplicate([...functionNames, ...classNames], equateValues);
         const checker = program.getTypeChecker();
         const references = flatMap(
-          names,
+          names2,
           /*mapfn*/
           (name2) => ts_FindAllReferences_exports.getReferenceEntriesForNode(-1, name2, program, program.getSourceFiles(), cancellationToken)
         );
@@ -159544,7 +159544,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         if (!every(
           groupedReferences.declarations,
           /*callback*/
-          (decl) => contains(names, decl)
+          (decl) => contains(names2, decl)
         )) {
           groupedReferences.valid = false;
         }
@@ -171257,7 +171257,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         const predicate = (node) => isExportDeclaration(node) && (isTypeOnly2 && node.isTypeOnly || !node.isTypeOnly);
         return findLast(sourceFile.statements, predicate);
       }
-      function updateExport(changes, program, sourceFile, node, names) {
+      function updateExport(changes, program, sourceFile, node, names2) {
         const namedExports = node.exportClause && isNamedExports(node.exportClause) ? node.exportClause.elements : factory.createNodeArray([]);
         const allowTypeModifier = !node.isTypeOnly && !!(getIsolatedModules(program.getCompilerOptions()) || find(namedExports, (e) => e.isTypeOnly));
         changes.replaceNode(
@@ -171269,7 +171269,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
             node.isTypeOnly,
             factory.createNamedExports(
               factory.createNodeArray(
-                [...namedExports, ...createExportSpecifiers(names, allowTypeModifier)],
+                [...namedExports, ...createExportSpecifiers(names2, allowTypeModifier)],
                 /*hasTrailingComma*/
                 namedExports.hasTrailingComma
               )
@@ -171279,14 +171279,14 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           )
         );
       }
-      function createExport(changes, program, sourceFile, names) {
+      function createExport(changes, program, sourceFile, names2) {
         changes.insertNodeAtEndOfScope(sourceFile, sourceFile, factory.createExportDeclaration(
           /*modifiers*/
           void 0,
           /*isTypeOnly*/
           false,
           factory.createNamedExports(createExportSpecifiers(
-            names,
+            names2,
             /*allowTypeModifier*/
             getIsolatedModules(program.getCompilerOptions())
           )),
@@ -171296,8 +171296,8 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           void 0
         ));
       }
-      function createExportSpecifiers(names, allowTypeModifier) {
-        return factory.createNodeArray(map(names, (n) => factory.createExportSpecifier(
+      function createExportSpecifiers(names2, allowTypeModifier) {
+        return factory.createNodeArray(map(names2, (n) => factory.createExportSpecifier(
           allowTypeModifier && n.isTypeOnly,
           /*propertyName*/
           void 0,
@@ -173193,13 +173193,13 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         if (!length(signature.parameters)) return void 0;
         const sourceFile = context.sourceFile;
         const tags = getJSDocTags(signature);
-        const names = /* @__PURE__ */ new Set();
+        const names2 = /* @__PURE__ */ new Set();
         for (const tag of tags) {
           if (isJSDocParameterTag(tag) && isIdentifier(tag.name)) {
-            names.add(tag.name.escapedText);
+            names2.add(tag.name.escapedText);
           }
         }
-        const parameterName = firstDefined(signature.parameters, (p) => isIdentifier(p.name) && !names.has(p.name.escapedText) ? p.name.getText(sourceFile) : void 0);
+        const parameterName = firstDefined(signature.parameters, (p) => isIdentifier(p.name) && !names2.has(p.name.escapedText) ? p.name.getText(sourceFile) : void 0);
         if (parameterName === void 0) return void 0;
         const newJSDocParameterTag = factory.updateJSDocParameterTag(
           jsDocParameterTag,
@@ -176421,7 +176421,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         const isJs2 = isInJSFile(contextNode);
         const { typeArguments, arguments: args2, parent: parent2 } = call;
         const contextualType = isJs2 ? void 0 : checker.getContextualType(call);
-        const names = map(args2, (arg) => isIdentifier(arg) ? arg.text : isPropertyAccessExpression(arg) && isIdentifier(arg.name) ? arg.name.text : void 0);
+        const names2 = map(args2, (arg) => isIdentifier(arg) ? arg.text : isPropertyAccessExpression(arg) && isIdentifier(arg.name) ? arg.name.text : void 0);
         const instanceTypes = isJs2 ? [] : map(args2, (arg) => checker.getTypeAtLocation(arg));
         const { argumentTypeNodes, argumentTypeParameters } = getArgumentTypesAndTypeParameters(
           checker,
@@ -176441,7 +176441,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         const typeParameters = isJs2 ? void 0 : createTypeParametersForArguments(checker, argumentTypeParameters, typeArguments);
         const parameters = createDummyParameters(
           args2.length,
-          names,
+          names2,
           argumentTypeNodes,
           /*minArgumentCount*/
           void 0,
@@ -176638,11 +176638,11 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         }
         return type.flags & 524288 ? (_a = type.getSymbol()) == null ? void 0 : _a.getName() : void 0;
       }
-      function createDummyParameters(argCount, names, types, minArgumentCount, inJs) {
+      function createDummyParameters(argCount, names2, types, minArgumentCount, inJs) {
         const parameters = [];
         const parameterNameCounts = /* @__PURE__ */ new Map();
         for (let i2 = 0; i2 < argCount; i2++) {
-          const parameterName = (names == null ? void 0 : names[i2]) || `arg${i2}`;
+          const parameterName = (names2 == null ? void 0 : names2[i2]) || `arg${i2}`;
           const parameterNameCount = parameterNameCounts.get(parameterName);
           parameterNameCounts.set(parameterName, (parameterNameCount || 0) + 1);
           const newParameter = factory.createParameterDeclaration(
@@ -182579,10 +182579,10 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           void 0
         );
       }
-      function addReplacementSpans(text, textStart, names) {
+      function addReplacementSpans(text, textStart, names2) {
         const span = getDirectoryFragmentTextSpan(text, textStart);
         const wholeSpan = text.length === 0 ? void 0 : createTextSpan(textStart, text.length);
-        return names.map(({ name: name2, kind, extension }) => name2.includes(directorySeparator) || name2.includes(altDirectorySeparator) ? { name: name2, kind, extension, span: wholeSpan } : { name: name2, kind, extension, span });
+        return names2.map(({ name: name2, kind, extension }) => name2.includes(directorySeparator) || name2.includes(altDirectorySeparator) ? { name: name2, kind, extension, span: wholeSpan } : { name: name2, kind, extension, span });
       }
       function getStringLiteralCompletionsFromModuleNames(sourceFile, node, program, host, preferences) {
         return addReplacementSpans(node.text, node.getStart(sourceFile) + 1, getStringLiteralCompletionsFromModuleNamesWorker(sourceFile, node, program, host, preferences));
@@ -183153,7 +183153,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         }
         const [, prefix, kind, toComplete] = match;
         const scriptPath = getDirectoryPath(sourceFile.path);
-        const names = kind === "path" ? getCompletionEntriesForDirectoryFragment(
+        const names2 = kind === "path" ? getCompletionEntriesForDirectoryFragment(
           toComplete,
           scriptPath,
           getExtensionOptions(compilerOptions, 0, sourceFile),
@@ -183164,7 +183164,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           true,
           sourceFile.path
         ) : kind === "types" ? getCompletionEntriesFromTypings(program, host, moduleSpecifierResolutionHost, scriptPath, getFragmentDirectory(toComplete), getExtensionOptions(compilerOptions, 1, sourceFile)) : Debug.fail();
-        return addReplacementSpans(toComplete, range.pos + prefix.length, arrayFrom(names.values()));
+        return addReplacementSpans(toComplete, range.pos + prefix.length, arrayFrom(names2.values()));
       }
       function getCompletionEntriesFromTypings(program, host, moduleSpecifierResolutionHost, scriptPath, fragmentDirectory, extensionOptions, result = createNameAndKindSet()) {
         const options = program.getCompilerOptions();
@@ -204732,7 +204732,7 @@ ${options.prefix}` : "\n" : options.prefix
         }
         /** @internal */
         logErrorForScriptInfoNotFound(fileName) {
-          const names = arrayFrom(
+          const names2 = arrayFrom(
             mapDefinedIterator(
               this.filenameToScriptInfo.entries(),
               (entry) => entry[1].deferredDelete ? void 0 : entry
@@ -204741,7 +204741,7 @@ ${options.prefix}` : "\n" : options.prefix
           );
           this.logger.msg(
             `Could not find file ${JSON.stringify(fileName)}.
-All files are: ${JSON.stringify(names)}`,
+All files are: ${JSON.stringify(names2)}`,
             "Err"
             /* Err */
           );
@@ -224454,6 +224454,9 @@ var MAX_MAP_BYTES = 256 * 1024 * 1024;
 // ../engine/src/coverage/reads.ts
 var READS_MARK = fnId("", "jiffy:reads");
 
+// ../engine/src/specs.ts
+var MAX_SPEC_SCAN_BYTES = 2 * 1024 * 1024;
+
 // ../engine/src/index.ts
 try {
   await initParsers();
@@ -225191,11 +225194,11 @@ var RunnerDetector = class {
     const viteTests = !!viteCfg && (testScripts.some(([, v]) => /\bvitest\b/.test(v)) || /\btest\s*:\s*\{/.test(viteText) && !!findBin(this.root, abs, "vitest"));
     const vitestAll = vitestCfg || viteTests ? { detection: { adapter: vitestAdapter(dir) }, globs: null } : null;
     if (hasPkg) {
-      const names = [
+      const names2 = [
         "test",
         ...Object.keys(scripts).filter((k) => /^test[:-]/.test(k) && !/coverage|watch|browser|e2e/i.test(k))
       ];
-      for (const [i2, name2] of names.entries()) {
+      for (const [i2, name2] of names2.entries()) {
         const script = scripts[name2] ?? "";
         const globs = scriptGlobs(script);
         const claim = i2 === 0 && !globs.length ? null : globs;
@@ -226518,15 +226521,15 @@ function readCoverage(dir, tests, ctx) {
     );
   })();
   const wantNames = /* @__PURE__ */ (() => {
-    let names = null;
+    let names2 = null;
     return () => {
-      if (names) return names;
-      names = /* @__PURE__ */ new Set();
+      if (names2) return names2;
+      names2 = /* @__PURE__ */ new Set();
       for (const f of ctx.want) {
         const text = textOf(f);
-        if (text) for (const n of declaredNames(f, text)) names.add(n);
+        if (text) for (const n of declaredNames(f, text)) names2.add(n);
       }
-      return names;
+      return names2;
     };
   })();
   const nameless = (s) => {
@@ -227115,14 +227118,14 @@ function configReadable(path) {
   return /\.[cm]?[jt]sx?$/.test(path) && !SOURCE_DIR.test(path) && !isTestSupport(path);
 }
 function testOnlyEnvNames(envFiles2) {
-  const names = (text) => [...text.matchAll(/^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/gm)].map((m) => m[1]);
+  const names2 = (text) => [...text.matchAll(/^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/gm)].map((m) => m[1]);
   const dirs = /* @__PURE__ */ new Map();
   for (const [path, text] of envFiles2) {
     const dir = posix3.dirname(path);
     const d = dirs.get(dir) ?? { test: /* @__PURE__ */ new Set(), other: /* @__PURE__ */ new Set() };
     dirs.set(dir, d);
     const into = /(^|\/)\.env\.test(\.local)?$/.test(path) ? d.test : d.other;
-    for (const n of names(text)) into.add(n);
+    for (const n of names2(text)) into.add(n);
   }
   const out2 = /* @__PURE__ */ new Set();
   const everyMode = /* @__PURE__ */ new Set(["NODE_ENV", "MODE", "BASE_URL", "DEV", "PROD", "SSR", "TZ", "CI"]);
@@ -227166,9 +227169,9 @@ function moduleShape(text) {
   const mods = (n) => import_typescript11.default.canHaveModifiers(n) ? import_typescript11.default.getModifiers(n) ?? [] : [];
   const exported = (n) => mods(n).some((x) => x.kind === import_typescript11.default.SyntaxKind.ExportKeyword);
   const isDefault = (n) => mods(n).some((x) => x.kind === import_typescript11.default.SyntaxKind.DefaultKeyword);
-  const names = (b, out2 = []) => {
+  const names2 = (b, out2 = []) => {
     if (import_typescript11.default.isIdentifier(b)) out2.push(b.text);
-    else for (const el of b.elements) if (!import_typescript11.default.isOmittedExpression(el)) names(el.name, out2);
+    else for (const el of b.elements) if (!import_typescript11.default.isOmittedExpression(el)) names2(el.name, out2);
     return out2;
   };
   for (const st of sf.statements) {
@@ -227183,7 +227186,7 @@ function moduleShape(text) {
           m.imports.set(el.name.text, { spec, name: (el.propertyName ?? el.name).text });
     } else if (import_typescript11.default.isVariableStatement(st)) {
       for (const d of st.declarationList.declarations)
-        for (const n of names(d.name)) {
+        for (const n of names2(d.name)) {
           m.locals.set(n, d);
           if (exported(st)) m.exports.set(n, { local: n });
         }
@@ -227236,13 +227239,13 @@ function scopeOf(d) {
 function scopedDecls(sf) {
   const out2 = /* @__PURE__ */ new Map();
   const add = (name2, d) => out2.set(name2, [...out2.get(name2) ?? [], d]);
-  const names = (b, d) => {
+  const names2 = (b, d) => {
     if (import_typescript11.default.isIdentifier(b)) add(b.text, d);
-    else for (const el of b.elements) if (!import_typescript11.default.isOmittedExpression(el)) names(el.name, d);
+    else for (const el of b.elements) if (!import_typescript11.default.isOmittedExpression(el)) names2(el.name, d);
   };
   const topLevel2 = (d) => import_typescript11.default.isVariableDeclaration(d) && import_typescript11.default.isVariableStatement(d.parent.parent) && import_typescript11.default.isSourceFile(d.parent.parent.parent);
   const visit2 = (n) => {
-    if ((import_typescript11.default.isParameter(n) || import_typescript11.default.isVariableDeclaration(n)) && !topLevel2(n)) names(n.name, n);
+    if ((import_typescript11.default.isParameter(n) || import_typescript11.default.isVariableDeclaration(n)) && !topLevel2(n)) names2(n.name, n);
     else if (import_typescript11.default.isFunctionDeclaration(n) && n.name && !import_typescript11.default.isSourceFile(n.parent)) add(n.name.text, n);
     import_typescript11.default.forEachChild(n, visit2);
   };
@@ -229556,8 +229559,8 @@ function chainsOff(p, target, files, budget) {
   if (PR_TRIGGERS.some((t) => p.on.has(t) && prTriggerRuns(p.on.get(t), target, files, budget))) return [];
   const cfg = p.on.get("workflow_run");
   if (!isRecord(cfg)) return [];
-  const names = typeof cfg.workflows === "string" ? [cfg.workflows] : cfg.workflows;
-  return Array.isArray(names) ? names.map(String).filter(Boolean) : [];
+  const names2 = typeof cfg.workflows === "string" ? [cfg.workflows] : cfg.workflows;
+  return Array.isArray(names2) ? names2.map(String).filter(Boolean) : [];
 }
 function mainOnlyTriggers(p, target, headBranch, files, budget) {
   if (PR_TRIGGERS.some((t) => p.on.has(t) && prTriggerRuns(p.on.get(t), target, files, budget))) return [];
@@ -229606,10 +229609,10 @@ function risks(p) {
   }
   return [...out2];
 }
-function allowEntry(dispatch, path, names) {
+function allowEntry(dispatch, path, names2) {
   const file = path.slice(path.lastIndexOf("/") + 1);
   return dispatch.find(
-    (d) => d.workflow === path || d.workflow === file || names.some((n) => n !== null && n === d.workflow)
+    (d) => d.workflow === path || d.workflow === file || names2.some((n) => n !== null && n === d.workflow)
   ) ?? null;
 }
 function plan(cache2, opts) {

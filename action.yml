@@ -1,8 +1,56 @@
 name: Jiffy gate
-description: Decide which tests and matrix combinations this push runs. Fails closed to running everything.
+description: Decide which tests this change runs, as one step inside the test job (phase select) or as its own job. Fails closed to running everything.
 author: Jiffy
 
 inputs:
+  phase:
+    description: 'The in-job selection step: select (inside the test job, before the test command; outputs args for the runner) or outcome (after it: judges the decision against the test report). Empty runs the separate-job gate or the evidence modes.'
+    required: false
+    default: ''
+  runner:
+    description: 'phase select: the test runner the args are for: vitest, jest, node-test or pytest.'
+    required: false
+    default: 'vitest'
+  root:
+    description: "phase select: the runner's working directory relative to the repo (a package in a monorepo); args are relative to it."
+    required: false
+    default: ''
+  test-paths:
+    description: "phase select: where this runner's test files live, as path prefixes (`*` is one segment), one per line. Default: anywhere."
+    required: false
+    default: ''
+  map-signature:
+    description: "phase select: the map's signature (the JSON of the service's GET /v1/ledger/maps/:owner/:repo/:sha/signature: {claims, signature}), as a path or https URL. Default: the map path plus .sig.json. Unsigned maps only feed shadow proposals; a wrong signature runs everything."
+    required: false
+    default: ''
+  history:
+    description: 'phase select: recent test failures from the ledger, a JSON array of {file, failedAt}. Only adds tests.'
+    required: false
+    default: ''
+  max-map-commits:
+    description: 'phase select: maps whose commit is more than this many commits behind the base are stale and run everything.'
+    required: false
+    default: '200'
+  policy-files:
+    description: 'phase select: more files whose change runs everything (the workflow running the step and the Tensile config always do), one per line.'
+    required: false
+    default: ''
+  check-run-id:
+    description: "phase select: the job's id, as job.check_run_id in an expression. The ledger decision's subject, so the control room can join it to the job's timings."
+    required: false
+    default: ''
+  test-step:
+    description: 'phase select: the name of the step that runs the tests; the control room scales its duration by the skipped share.'
+    required: false
+    default: ''
+  report:
+    description: "phase select (post hook) or outcome: the runner's test report(s), Vitest/Jest JSON or JUnit XML, one per line. The outcome counts a miss for any failing test selection skipped."
+    required: false
+    default: ''
+  test-outcome:
+    description: 'phase outcome: steps.<test>.outcome, so a failed test step whose report lists no failure reads unknown.'
+    required: false
+    default: ''
   map:
     description: Coverage map (.bin.gz) as a path or an http(s) URL. Missing, unreadable or stale -> run everything.
     required: false
@@ -16,9 +64,9 @@ inputs:
     required: false
     default: ''
   mode:
-    description: report (default; everything still runs, the summary shows what would be skipped) or enforce.
+    description: 'The gate: report (default; everything still runs, the summary shows what would be skipped) or enforce. phase select: shadow (the default when empty) or enforce, which takes effect only when the service enabled it for the repo, the map verified and the ledger is fresh.'
     required: false
-    default: report
+    default: ''
   matrix:
     description: Strategy matrix as JSON. Pruned to one combination per push; full on merge_group and default-branch pushes.
     required: false
@@ -52,7 +100,7 @@ inputs:
     required: false
     default: ''
   decision-file:
-    description: "Also write the decision (the service's DecisionPayload: selected with reasons, sampled, skipped) to this JSON file, for later steps such as `jiffy misses`."
+    description: "phase select and outcome: where the decision file goes (default $RUNNER_TEMP/tensile/selection-decision.json). The gate: also write the decision (the service's DecisionPayload: selected with reasons, sampled, skipped) to this JSON file, for later steps such as `jiffy misses`."
     required: false
     default: ''
   service-url:
@@ -68,7 +116,7 @@ inputs:
     required: false
     default: 'false'
   matrix-key:
-    description: "Evidence step: the job's matrix, as toJSON(matrix) in an expression, so each leg writes its own file."
+    description: "Evidence step and phase select: the job's matrix, as toJSON(matrix) in an expression, so each leg writes its own file (and the selection decision names its job)."
     required: false
     default: ''
   evidence-dir:
@@ -87,6 +135,24 @@ inputs:
 outputs:
   run-all:
     description: "'true' or 'false'. Treat anything other than 'false' (including empty) as true."
+  args:
+    description: 'phase select: the selected tests as shell-quoted arguments for the runner (vitest run $ARGS, jest $ARGS, node --test $ARGS, pytest $ARGS). Empty when run-all; an empty args runs the whole suite.'
+  files:
+    description: 'phase select: the selected test files relative to root, one per line.'
+  count:
+    description: 'phase select: how many test files args lists.'
+  skip:
+    description: "phase select: 'true' when enforcing and the change selects no test at all; skip the test command then. Never 'true' in shadow."
+  mode:
+    description: 'phase select: the mode in effect, shadow or enforce.'
+  decision-file:
+    description: 'phase select: the decision file written (for phase outcome).'
+  record-file:
+    description: 'phase outcome: the ledger records (tensile.selection-record): the smart_execution decision and its outcome.'
+  verdict:
+    description: 'phase outcome: correct, miss or unknown.'
+  missed:
+    description: 'phase outcome: failing test files selection skipped (or would have), as a JSON array.'
   reason:
     description: Why everything runs, when it does.
   tests:
@@ -113,3 +179,6 @@ outputs:
 runs:
   using: node24
   main: dist/index.js
+  # Only the in-job selection step does anything here (its outcome, when given `report`); every other mode exits.
+  post: dist/index.js
+  post-if: always()

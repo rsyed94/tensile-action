@@ -107,6 +107,15 @@ ${d}
     warning(message) {
       process.stdout.write(`::warning title=Jiffy::${escapeCommand(message)}
 `);
+    },
+    state(name2, value) {
+      const file = env.GITHUB_STATE;
+      if (!file) return;
+      const d = `ghadelimiter_${randomUUID()}`;
+      appendFileSync(file, `${name2}<<${d}
+${value}
+${d}
+`);
     }
   };
 }
@@ -243,6 +252,12 @@ var servicePaths = {
    * or before commit `before` on the default branch; 404 when there is none.
    */
   map: (owner, repo, before) => `/v1/maps/${seg(owner)}/${seg(repo)}?before=${seg(before)}`,
+  /**
+   * GET (the ledger, docs/spec/ledger.md §3.3): 200 with the newest *signed* map at or before `before` and its claims
+   * and signature in headers (MAP_CLAIMS_HEADER, MAP_SIGNATURE_HEADER); 404 when there is none. The in-job step reads
+   * maps only from here.
+   */
+  ledgerMap: (owner, repo, before) => `/v1/ledger/maps/${seg(owner)}/${seg(repo)}?before=${seg(before)}`,
   /** GET: 200 with a RepoConfig. */
   config: (owner, repo) => `/v1/repos/${seg(owner)}/${seg(repo)}/config`,
   /** GET: 200 with a QuarantineList (@jiffy/flaky/state): flaky tests kept out of the fast check (R13). */
@@ -250,6 +265,8 @@ var servicePaths = {
   /** POST a DecisionPayload: any 2xx (body optional, DecisionAck when present). */
   decisions: "/v1/decisions"
 };
+var MAP_CLAIMS_HEADER = "x-tensile-map-claims";
+var MAP_SIGNATURE_HEADER = "x-tensile-map-signature";
 var MAX_TRIGGERS = 50;
 var EVIDENCE_PATH = "/v1/evidence";
 var EVIDENCE_MAX_BYTES = 5 * 1024 * 1024;
@@ -328,6 +345,11 @@ async function fetchConfig(t, token) {
   if (!cfg || typeof cfg.runAll !== "boolean") throw new ServiceError(`GET ${path}: malformed config`);
   if (cfg.mode !== void 0 && cfg.mode !== "report" && cfg.mode !== "enforce")
     throw new ServiceError(`GET ${path}: unknown mode ${JSON.stringify(cfg.mode)}`);
+  if (cfg.selectionEnforce !== void 0 && (!Array.isArray(cfg.selectionEnforce) || cfg.selectionEnforce.some((k) => typeof k !== "string")))
+    throw new ServiceError(`GET ${path}: selectionEnforce must be a list of strings`);
+  const l = cfg.ledger;
+  if (l !== void 0 && (!l || typeof l.stale !== "boolean" || typeof l.complete !== "boolean" || typeof l.lagMs !== "number" || !Array.isArray(l.reasons)))
+    throw new ServiceError(`GET ${path}: malformed ledger freshness`);
   return cfg;
 }
 async function fetchQuarantine(t, token) {
@@ -343,6 +365,17 @@ async function fetchMap(t, token, before) {
   const path = servicePaths.map(t.owner, t.repo, before);
   const res = await call(`GET ${path}`, base(t) + path, { headers: auth(token) }, t.timeoutMs);
   return Buffer.from(await res.arrayBuffer());
+}
+async function fetchSignedMap(t, token, before) {
+  const path = servicePaths.ledgerMap(t.owner, t.repo, before);
+  const res = await call(`GET ${path}`, base(t) + path, { headers: auth(token) }, t.timeoutMs);
+  const claims = res.headers.get(MAP_CLAIMS_HEADER);
+  const signature = res.headers.get(MAP_SIGNATURE_HEADER);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  const offered = claims !== null || signature !== null;
+  if (!claims || !signature || claims.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(claims))
+    return { bytes, signed: null, offered };
+  return { bytes, signed: { claims: Buffer.from(claims, "base64url").toString("utf8"), signature }, offered };
 }
 async function postDecision(t, token, d) {
   const path = servicePaths.decisions;
@@ -2295,13 +2328,13 @@ async function Module2(moduleArg = {}) {
       }
       readAsync = /* @__PURE__ */ __name(async (url) => {
         if (isFileURI(url)) {
-          return new Promise((resolve4, reject) => {
+          return new Promise((resolve7, reject) => {
             var xhr = new XMLHttpRequest();
             xhr.open("GET", url, true);
             xhr.responseType = "arraybuffer";
             xhr.onload = () => {
               if (xhr.status == 200 || xhr.status == 0 && xhr.response) {
-                resolve4(xhr.response);
+                resolve7(xhr.response);
                 return;
               }
               reject(xhr.status);
@@ -2497,9 +2530,9 @@ async function Module2(moduleArg = {}) {
     __name(receiveInstantiationResult, "receiveInstantiationResult");
     var info2 = getWasmImports();
     if (Module["instantiateWasm"]) {
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve7, reject) => {
         Module["instantiateWasm"](info2, (mod, inst) => {
-          resolve4(receiveInstance(mod, inst));
+          resolve7(receiveInstance(mod, inst));
         });
       });
     }
@@ -2775,8 +2808,8 @@ async function Module2(moduleArg = {}) {
     "e": 111
   };
   var generateTypePack = /* @__PURE__ */ __name((types) => uleb128EncodeWithLen(Array.from(types, (type) => {
-    var code2 = wasmTypeCodes[type];
-    return code2;
+    var code3 = wasmTypeCodes[type];
+    return code3;
   })), "generateTypePack");
   var convertJsFunctionToWasm = /* @__PURE__ */ __name((func2, sig) => {
     var bytes = Uint8Array.of(
@@ -3178,10 +3211,10 @@ async function Module2(moduleArg = {}) {
     dso.global = flags2.global;
     function loadLibData() {
       if (handle2) {
-        var data = LE_HEAP_LOAD_U32((handle2 + 28 >> 2) * 4);
+        var data2 = LE_HEAP_LOAD_U32((handle2 + 28 >> 2) * 4);
         var dataSize = LE_HEAP_LOAD_U32((handle2 + 32 >> 2) * 4);
-        if (data && dataSize) {
-          var libData = HEAP8.slice(data, data + dataSize);
+        if (data2 && dataSize) {
+          var libData = HEAP8.slice(data2, data2 + dataSize);
           return flags2.loadAsync ? Promise.resolve(libData) : libData;
         }
       }
@@ -3361,7 +3394,7 @@ async function Module2(moduleArg = {}) {
   _fd_close.sig = "ii";
   var INT53_MAX = 9007199254740992;
   var INT53_MIN = -9007199254740992;
-  var bigintToI53Checked = /* @__PURE__ */ __name((num) => num < INT53_MIN || num > INT53_MAX ? NaN : Number(num), "bigintToI53Checked");
+  var bigintToI53Checked = /* @__PURE__ */ __name((num2) => num2 < INT53_MIN || num2 > INT53_MAX ? NaN : Number(num2), "bigintToI53Checked");
   function _fd_seek(fd, offset, whence, newOffset) {
     offset = bigintToI53Checked(offset);
     return 70;
@@ -3379,7 +3412,7 @@ async function Module2(moduleArg = {}) {
     }
   }, "printChar");
   var _fd_write = /* @__PURE__ */ __name((fd, iov, iovcnt, pnum) => {
-    var num = 0;
+    var num2 = 0;
     for (var i2 = 0; i2 < iovcnt; i2++) {
       var ptr = LE_HEAP_LOAD_U32((iov >> 2) * 4);
       var len = LE_HEAP_LOAD_U32((iov + 4 >> 2) * 4);
@@ -3387,9 +3420,9 @@ async function Module2(moduleArg = {}) {
       for (var j = 0; j < len; j++) {
         printChar(fd, HEAPU8[ptr + j]);
       }
-      num += len;
+      num2 += len;
     }
-    LE_HEAP_STORE_U32((pnum >> 2) * 4, num);
+    LE_HEAP_STORE_U32((pnum >> 2) * 4, num2);
     return 0;
   }, "_fd_write");
   _fd_write.sig = "iippp";
@@ -3435,13 +3468,13 @@ async function Module2(moduleArg = {}) {
   __name(_tree_sitter_query_progress_callback, "_tree_sitter_query_progress_callback");
   var runtimeKeepaliveCounter = 0;
   var keepRuntimeAlive = /* @__PURE__ */ __name(() => noExitRuntime || runtimeKeepaliveCounter > 0, "keepRuntimeAlive");
-  var _proc_exit = /* @__PURE__ */ __name((code2) => {
-    EXITSTATUS = code2;
+  var _proc_exit = /* @__PURE__ */ __name((code3) => {
+    EXITSTATUS = code3;
     if (!keepRuntimeAlive()) {
-      Module["onExit"]?.(code2);
+      Module["onExit"]?.(code3);
       ABORT = true;
     }
-    quit_(code2, new ExitStatus(code2));
+    quit_(code3, new ExitStatus(code3));
   }, "_proc_exit");
   _proc_exit.sig = "vi";
   var exitJS = /* @__PURE__ */ __name((status, implicit) => {
@@ -3832,8 +3865,8 @@ async function Module2(moduleArg = {}) {
   if (runtimeInitialized) {
     moduleRtn = Module;
   } else {
-    moduleRtn = new Promise((resolve4, reject) => {
-      readyPromiseResolve = resolve4;
+    moduleRtn = new Promise((resolve7, reject) => {
+      readyPromiseResolve = resolve7;
       readyPromiseReject = reject;
     });
   }
@@ -4848,7 +4881,7 @@ function pySpans(_path, source) {
     };
     visit(root, "", false, true);
     const lineCount = source.split("\n").length;
-    const code2 = new Uint8Array(lineCount + 2);
+    const code3 = new Uint8Array(lineCount + 2);
     const cur = root.walk();
     try {
       let down = true;
@@ -4857,7 +4890,7 @@ function pySpans(_path, source) {
           const n = cur.currentNode;
           if (n.type !== "comment" && !inertNodes.has(n.id)) {
             if (n.childCount === 0) {
-              for (let r = n.startPosition.row; r <= n.endPosition.row; r++) code2[r + 1] = 1;
+              for (let r = n.startPosition.row; r <= n.endPosition.row; r++) code3[r + 1] = 1;
             } else if (cur.gotoFirstChild()) continue;
           }
         }
@@ -4869,7 +4902,7 @@ function pySpans(_path, source) {
       cur.delete();
     }
     const blankLines = /* @__PURE__ */ new Set();
-    for (let l = 1; l <= lineCount; l++) if (!code2[l]) blankLines.add(l);
+    for (let l = 1; l <= lineCount; l++) if (!code3[l]) blankLines.add(l);
     const spans = { functions, typeRanges, importRanges, bindings, blankLines, lineCount };
     return { ok: true, spans };
   } finally {
@@ -4970,7 +5003,7 @@ function pyRefs(_path, source) {
     const registering = /* @__PURE__ */ new Set();
     const classFacts = (n, name2, body2, s) => {
       const args2 = n.childForFieldName("superclasses");
-      const list2 = [];
+      const list3 = [];
       for (const a of args2?.namedChildren ?? []) {
         if (!a) continue;
         if (a.type === "keyword_argument") {
@@ -4978,10 +5011,10 @@ function pyRefs(_path, source) {
           continue;
         }
         const text = a.text.replace(/\s+/g, "");
-        list2.push(text);
+        list3.push(text);
         if (REGISTERING_BASES.test(text)) s.opaque ??= `base ${text} registers subclasses`;
       }
-      bases.set(name2, list2);
+      bases.set(name2, list3);
       for (const st of body2.namedChildren) {
         if (!st) continue;
         const def = st.type === "decorated_definition" ? st.childForFieldName("definition") : st;
@@ -5273,8 +5306,8 @@ var Resolver = class {
     for (const f of this.files) {
       if (!isPy(f)) continue;
       const b = baseOf(f) === "__init__.py" ? baseOf(dirOf(f)) : baseOf(f).slice(0, -3);
-      const list2 = this.byBase.get(b);
-      if (list2) list2.push(f);
+      const list3 = this.byBase.get(b);
+      if (list3) list3.push(f);
       else this.byBase.set(b, [f]);
     }
     {
@@ -6629,8 +6662,8 @@ function tsSpans(path, source) {
   const chars = source.split("");
   for (const c of r.comments) for (let i2 = c.start; i2 < c.end; i2++) if (chars[i2] !== "\n") chars[i2] = " ";
   const blankLines = /* @__PURE__ */ new Set();
-  const lines = chars.join("").split("\n");
-  lines.forEach((l, i2) => {
+  const lines3 = chars.join("").split("\n");
+  lines3.forEach((l, i2) => {
     if (!l.trim()) blankLines.add(i2 + 1);
   });
   const spans = {
@@ -6640,7 +6673,7 @@ function tsSpans(path, source) {
     reexportRanges,
     bindings,
     blankLines,
-    lineCount: lines.length
+    lineCount: lines3.length
   };
   return { ok: true, spans };
 }
@@ -7083,7 +7116,7 @@ var blobCache = /* @__PURE__ */ new Map();
 function gitTree(repo, rev) {
   let ids = null;
   let paths = null;
-  const list2 = () => {
+  const list3 = () => {
     if (ids) return ids;
     ids = /* @__PURE__ */ new Map();
     for (const l of git(repo, ["ls-tree", "-r", "-z", "--full-tree", rev]).split("\0")) {
@@ -7096,22 +7129,22 @@ function gitTree(repo, rev) {
   };
   const prefetch = (paths2) => {
     const missing = [
-      ...new Set(paths2.map((p) => list2().get(p)).filter((id) => !!id && !blobCache.has(id)))
+      ...new Set(paths2.map((p) => list3().get(p)).filter((id) => !!id && !blobCache.has(id)))
     ];
     if (!missing.length) return;
     if (blobCache.size + missing.length > BLOB_CACHE_LIMIT) blobCache.clear();
     for (const [id, text] of readBlobs(repo, missing)) blobCache.set(id, text);
   };
   return {
-    paths: () => paths ??= [...list2().keys()],
+    paths: () => paths ??= [...list3().keys()],
     read: (p) => {
-      const id = list2().get(p);
+      const id = list3().get(p);
       if (!id) return null;
       if (!blobCache.has(id)) prefetch([p]);
       return blobCache.get(id) ?? null;
     },
     prefetch,
-    id: (p) => list2().get(p)
+    id: (p) => list3().get(p)
   };
 }
 
@@ -7144,7 +7177,7 @@ var QUOTES = `'"\``;
 var PY_IMPORT = /^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n#]*(?:\\\n[^\n#]*)*)|import[ \t]+([^\n#;]+))/gm;
 var pyImportCache = /* @__PURE__ */ new Map();
 var pyIndexes = /* @__PURE__ */ new WeakMap();
-function pyIndex(tree, files, resolve4) {
+function pyIndex(tree, files, resolve7) {
   let index = pyIndexes.get(tree);
   if (index) return index;
   index = /* @__PURE__ */ new Map();
@@ -7152,7 +7185,7 @@ function pyIndex(tree, files, resolve4) {
     const src = tree.read(p);
     if (!src) continue;
     for (const m of pyImportedModules(src, tree.id?.(p))) {
-      const r = resolve4(p, m);
+      const r = resolve7(p, m);
       if (!Array.isArray(r)) continue;
       for (const t of r) {
         let s = index.get(t);
@@ -7243,7 +7276,7 @@ function resolveReferences(seeds, ctx) {
   };
   const parsedPaths = /* @__PURE__ */ new Set();
   const { tree } = ctx;
-  const resolve4 = () => resolverFor(ctx);
+  const resolve7 = () => resolverFor(ctx);
   const exportedSeen = /* @__PURE__ */ new Map();
   let loadersDone = { js: false, py: false };
   const refsOf = (path) => {
@@ -7262,14 +7295,14 @@ function resolveReferences(seeds, ctx) {
   const sourcesOf = /* @__PURE__ */ (() => {
     const cache = /* @__PURE__ */ new Map();
     return (lang) => {
-      let list2 = cache.get(lang);
-      if (!list2) {
+      let list3 = cache.get(lang);
+      if (!list3) {
         const test = lang === "js" ? isJs : isPy;
-        list2 = tree.paths().filter((p) => test(p) && !p.includes("node_modules/"));
-        tree.prefetch?.(list2);
-        cache.set(lang, list2);
+        list3 = tree.paths().filter((p) => test(p) && !p.includes("node_modules/"));
+        tree.prefetch?.(list3);
+        cache.set(lang, list3);
       }
-      return list2;
+      return list3;
     };
   })();
   const addLoaders = (lang) => {
@@ -7303,7 +7336,7 @@ function resolveReferences(seeds, ctx) {
     return hit;
   };
   const namedByString = (path) => {
-    const parts2 = resolve4().pyModuleName(path).split(".");
+    const parts2 = resolve7().pyModuleName(path).split(".");
     const names2 = parts2.map((_, i2) => parts2.slice(i2).join(".")).filter((n) => n.includes("."));
     if (!names2.length) return null;
     for (const p of sourcesOf("py")) {
@@ -7315,7 +7348,7 @@ function resolveReferences(seeds, ctx) {
   };
   const importersOf = (path, exported) => isPy(path) ? pyImportersOf(path) : jsImportersOf(path, exported);
   const pyImportersOf = (path) => {
-    const index = pyIndex(tree, sourcesOf("py"), (p, m) => resolve4().py(p, m));
+    const index = pyIndex(tree, sourcesOf("py"), (p, m) => resolve7().py(p, m));
     const cands = new Set(index.get(path) ?? []);
     const needles = stems(path);
     for (const p of sourcesOf("py")) {
@@ -7337,7 +7370,7 @@ function resolveReferences(seeds, ctx) {
   };
   const jsImportersOf = (path, exported) => {
     const lang = "js";
-    const needles = [...stems(path), ...resolve4().packageNamesFor(path), ...resolve4().aliasNeedles(path)];
+    const needles = [...stems(path), ...resolve7().packageNamesFor(path), ...resolve7().aliasNeedles(path)];
     const named = [...exported].filter((e) => e !== "default" && e !== "*");
     const anyName = exported.has("default") || exported.has("*");
     const out2 = [];
@@ -7367,10 +7400,10 @@ function resolveReferences(seeds, ctx) {
   };
   const mayResolveTo = (from, spec, path) => {
     if (isPy(from)) {
-      const r = resolve4().py(from, spec);
+      const r = resolve7().py(from, spec);
       return r !== "external" && r !== "unknown" && r.includes(path);
     }
-    return mayBe(resolve4().js(from, spec), spec, path);
+    return mayBe(resolve7().js(from, spec), spec, path);
   };
   const queue = [];
   const enqueue = (path, names2, exported = []) => queue.push({ path, names: new Set(names2), exported: new Set(exported) });
@@ -7509,6 +7542,10 @@ function resolveReferences(seeds, ctx) {
     if (res.fileLevel.has(p)) res.units.delete(u);
   }
   return res;
+}
+function resolveSpecAll(ctx, from, spec) {
+  const r = resolverFor(ctx);
+  return isPy(from) ? r.py(from, spec) : r.js(from, spec);
 }
 function resolveSpec(ctx, from, spec) {
   const r = isPy(from) ? resolverFor(ctx).py(from, spec) : resolverFor(ctx).js(from, spec);
@@ -7810,7 +7847,7 @@ function analyzeChanges(diffs, read, opts = {}) {
     workspaces: Array.isArray(opts.workspaces) ? opts.workspaces : void 0,
     isTest: (p) => !!opts.knownTests?.has(p) || classify(p) === "test"
   };
-  const packageOf = (p) => opts.packageRoots?.find((r) => p.startsWith(r + "/")) ?? null;
+  const packageOf2 = (p) => opts.packageRoots?.find((r) => p.startsWith(r + "/")) ?? null;
   let graph = null;
   const workspaces = () => graph ??= typeof opts.workspaces === "function" ? opts.workspaces() : opts.workspaces ?? [];
   for (const d of diffs) {
@@ -7831,7 +7868,7 @@ function analyzeChanges(diffs, read, opts = {}) {
       if (gated) fc.runAll = "ci";
       else fc.note = "workflow does not run gated tests";
     } else if (RUN_ALL_KINDS.has(kind)) {
-      const root = kind !== "lockfile" && opts.nonCodeInPackage === "package" ? packageOf(d.path) : null;
+      const root = kind !== "lockfile" && opts.nonCodeInPackage === "package" ? packageOf2(d.path) : null;
       const dir = d.path.slice(0, Math.max(0, d.path.lastIndexOf("/")));
       const scoped = kind === "manifest" && d.path.endsWith("/package.json") ? packageAndDependents(workspaces(), dir) : [];
       if (root) fc.packageScope = [root];
@@ -7848,13 +7885,13 @@ function analyzeChanges(diffs, read, opts = {}) {
       if (!parser2) {
         fc.fileLevel = "no-parser";
       } else {
-        const lines = changedLines(d);
+        const lines3 = changedLines(d);
         const units = /* @__PURE__ */ new Set();
         let moduleLevel = false;
         const parsedSides = {};
         const moduleSides = {};
         for (const side of ["old", "new"]) {
-          const ls = lines[side];
+          const ls = lines3[side];
           if (!ls.length) continue;
           const src = read(side, d.path);
           if (src === null) {
@@ -8046,6 +8083,275 @@ function median(xs) {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+// ../engine/src/specs.ts
+var MAX_SPEC_SCAN_BYTES = 2 * 1024 * 1024;
+var MAX_CLAUSE = 8192;
+var isIdStart = (c) => c >= 97 && c <= 122 || c >= 65 && c <= 90 || c === 36 || c === 95 || c > 127;
+var isId = (c) => isIdStart(c) || c >= 48 && c <= 57;
+var isWs = (c) => c === 32 || c === 9 || c === 10 || c === 13 || c === 11 || c === 12 || c === 65279;
+var SPEC_CALLS = /* @__PURE__ */ new Set([
+  "require",
+  "mock",
+  "doMock",
+  "unmock",
+  "importActual",
+  "importMock",
+  "requireActual",
+  "requireMock",
+  "resolve"
+]);
+function jsSpecs(src) {
+  if (src.length > MAX_SPEC_SCAN_BYTES) return "unreadable";
+  const n = src.length;
+  const out2 = /* @__PURE__ */ new Set();
+  const code3 = (j) => src.charCodeAt(j);
+  const skip = (j) => {
+    while (j < n) {
+      const c = code3(j);
+      if (isWs(c)) j++;
+      else if (c === 47 && code3(j + 1) === 47) {
+        const e = src.indexOf("\n", j + 2);
+        j = e < 0 ? n : e + 1;
+      } else if (c === 47 && code3(j + 1) === 42) {
+        const e = src.indexOf("*/", j + 2);
+        j = e < 0 ? n : e + 2;
+      } else break;
+    }
+    return j;
+  };
+  const str = (j) => {
+    const q = code3(j);
+    if (q !== 39 && q !== 34 && q !== 96) return null;
+    let k = j + 1;
+    let interp = false;
+    while (k < n) {
+      const c = code3(k);
+      if (c === 92) k += 2;
+      else if (c === q) break;
+      else if (q !== 96 && c === 10) return null;
+      else {
+        if (q === 96 && c === 36 && code3(k + 1) === 123) interp = true;
+        k++;
+      }
+    }
+    if (k >= n) return null;
+    return interp ? null : [src.slice(j + 1, k), k + 1];
+  };
+  const pastString = (j) => {
+    const q = code3(j);
+    let k = j + 1;
+    while (k < n) {
+      const c = code3(k);
+      if (c === 92) k += 2;
+      else if (c === q) return k + 1;
+      else if (q !== 96 && c === 10) return k + 1;
+      else k++;
+    }
+    return n;
+  };
+  const word = (j) => {
+    let k = j;
+    while (k < n && isId(code3(k))) k++;
+    return [src.slice(j, k), k];
+  };
+  const callArg = (j) => {
+    let k = skip(j);
+    if (code3(k) !== 40) return j;
+    k = skip(k + 1);
+    const s = str(k);
+    if (s) out2.add(s[0]);
+    return s ? s[1] : k;
+  };
+  const clause = (j, typeOnly) => {
+    const stop2 = Math.min(n, j + MAX_CLAUSE);
+    let k = j;
+    while (k < stop2) {
+      k = skip(k);
+      if (k >= stop2) break;
+      const c = code3(k);
+      if (c === 123 || c === 125 || c === 44 || c === 42) {
+        k++;
+        continue;
+      }
+      if (c === 39 || c === 34) {
+        k = pastString(k);
+        continue;
+      }
+      if (!isIdStart(c)) return k;
+      const [w, e] = word(k);
+      if (w === "from") {
+        const s = str(skip(e));
+        if (s && !typeOnly) out2.add(s[0]);
+        return s ? s[1] : e;
+      }
+      if (w === "import" || w === "export") return k;
+      k = e;
+    }
+    return k;
+  };
+  const pastRegex = (j) => {
+    let k = j + 1;
+    let inClass = false;
+    while (k < n) {
+      const c = code3(k);
+      if (c === 10) return k;
+      if (c === 92) k += 2;
+      else {
+        if (c === 91) inClass = true;
+        else if (c === 93) inClass = false;
+        else if (c === 47 && !inClass) return k + 1;
+        k++;
+      }
+    }
+    return n;
+  };
+  const REGEX_AFTER = new Set([..."(,=:[!&|?{};+-*%<>~^"].map((x) => x.charCodeAt(0)));
+  const REGEX_WORDS = /* @__PURE__ */ new Set([
+    "return",
+    "typeof",
+    "case",
+    "do",
+    "else",
+    "in",
+    "of",
+    "new",
+    "delete",
+    "void",
+    "throw",
+    "yield",
+    "await"
+  ]);
+  let prevSig = 0;
+  let prevWord = "";
+  let i2 = 0;
+  while (i2 < n) {
+    const c = code3(i2);
+    if (c === 39 || c === 34 || c === 96) {
+      i2 = pastString(i2);
+      prevSig = 1;
+      prevWord = "";
+      continue;
+    }
+    if (c === 47 && (code3(i2 + 1) === 47 || code3(i2 + 1) === 42)) {
+      i2 = skip(i2);
+      continue;
+    }
+    if (c === 47) {
+      if (prevSig === 0 || REGEX_AFTER.has(prevSig) || prevSig === 1 && REGEX_WORDS.has(prevWord)) {
+        i2 = pastRegex(i2);
+        prevSig = 1;
+      } else {
+        i2++;
+        prevSig = c;
+      }
+      prevWord = "";
+      continue;
+    }
+    if (!isIdStart(c)) {
+      if (!isWs(c)) {
+        prevSig = c >= 48 && c <= 57 ? 1 : c;
+        prevWord = "";
+      }
+      i2++;
+      continue;
+    }
+    const prev = i2 > 0 ? code3(i2 - 1) : 0;
+    const [w, e] = word(i2);
+    prevSig = 1;
+    prevWord = w;
+    if (isId(prev) || prev >= 48 && prev <= 57) {
+      i2 = e;
+      continue;
+    }
+    const member = prev === 46;
+    if (!member && w === "import") {
+      const j = skip(e);
+      if (code3(j) === 40) i2 = callArg(e);
+      else if (code3(j) === 46)
+        i2 = e;
+      else {
+        const s = str(j);
+        if (s) {
+          out2.add(s[0]);
+          i2 = s[1];
+        } else {
+          const [t, te] = word(j);
+          const next = skip(te);
+          const typeOnly = t === "type" && (code3(next) === 123 || isIdStart(code3(next)) && word(next)[0] !== "from");
+          i2 = clause(typeOnly ? te : j, typeOnly);
+        }
+      }
+      continue;
+    }
+    if (!member && w === "export") {
+      let j = skip(e);
+      let typeOnly = false;
+      const [t, te] = word(j);
+      if (t === "type") {
+        typeOnly = true;
+        j = skip(te);
+      }
+      i2 = code3(j) === 123 || code3(j) === 42 ? clause(j, typeOnly) : Math.max(e, j);
+      continue;
+    }
+    if (w === "require" && !member || member && SPEC_CALLS.has(w)) {
+      i2 = Math.max(e, callArg(e));
+      continue;
+    }
+    i2 = e;
+  }
+  return [...out2];
+}
+function pySpecs(src) {
+  if (src.length > MAX_SPEC_SCAN_BYTES) return "unreadable";
+  const out2 = /* @__PURE__ */ new Set();
+  const lines3 = src.split("\n");
+  const noComment = (x) => {
+    const h = x.indexOf("#");
+    return h < 0 ? x : x.slice(0, h);
+  };
+  const HEAD = /^(try|else|finally|if|elif|while|for|with|except)\b[^:]*:/;
+  const names2 = (s) => s.replace(/[()\\]/g, " ").split(",").map((x) => x.trim().split(/\s+/)[0] ?? "").filter((x) => /^[\w.]+$/.test(x));
+  const statements = (raw2) => noComment(raw2).split(";").map((x) => {
+    let t = x.trimStart();
+    for (let k = 0; k < 4; k++) {
+      const m = HEAD.exec(t);
+      if (!m) break;
+      t = t.slice(m[0].length).trimStart();
+    }
+    return t;
+  });
+  for (let i2 = 0; i2 < lines3.length; i2++) {
+    const parts2 = statements(lines3[i2]);
+    for (let pi = 0; pi < parts2.length; pi++) {
+      const line = parts2[pi];
+      if (line.startsWith("import ") || line.startsWith("import	")) {
+        for (const m of names2(line.slice(7))) out2.add(m);
+        continue;
+      }
+      if (!line.startsWith("from ") && !line.startsWith("from	")) continue;
+      const rest = line.slice(5).trimStart();
+      const sp = rest.search(/\s/);
+      if (sp < 0) continue;
+      const mod = rest.slice(0, sp);
+      if (!mod || !/^\.*[\w.]*$/.test(mod)) continue;
+      out2.add(mod);
+      let tail = rest.slice(sp).trimStart();
+      if (!tail.startsWith("import")) continue;
+      tail = tail.slice(6);
+      if (pi === parts2.length - 1 && tail.includes("(") && !tail.includes(")"))
+        for (let k = 1; k <= 500 && i2 + 1 < lines3.length; k++) {
+          const more = noComment(lines3[++i2]);
+          tail += " " + more;
+          if (more.includes(")")) break;
+        }
+      for (const name2 of names2(tail))
+        if (/^\w+$/.test(name2)) out2.add(mod.endsWith(".") ? mod + name2 : `${mod}.${name2}`);
+    }
+  }
+  return [...out2];
+}
+
 // ../engine/src/select.ts
 var fnFilesCache = /* @__PURE__ */ new WeakMap();
 function filesWithFns(map) {
@@ -8129,6 +8435,294 @@ function select({ changes, map, allTests, always }) {
   }
   const skipped = [...universe].filter((t) => !tests.has(t));
   return { runAll: false, tests, skipped };
+}
+
+// ../engine/src/plan.ts
+var DEFAULT_BOUNDS = { maxCommits: 200, maxAgeDays: 14, maxFiles: 2e3 };
+var ms = (a, b) => Math.round((b - a) * 10) / 10;
+function revOk(repo, rev) {
+  try {
+    git(repo, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isAncestor(repo, a, b) {
+  try {
+    git(repo, ["merge-base", "--is-ancestor", a, b]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function mapStaleness(repo, map, base3, now, createdAt, bounds) {
+  const commit = map.meta.commit;
+  if (typeof commit !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit))
+    return "coverage map has no commit";
+  if (!revOk(repo, commit))
+    return `coverage map commit ${commit.slice(0, 10)} is not in this checkout (check out with fetch-depth: 0)`;
+  if (!isAncestor(repo, commit, base3))
+    return `coverage map commit ${commit.slice(0, 10)} is not an ancestor of the base ${base3.slice(0, 10)}`;
+  const distance = Number(git(repo, ["rev-list", "--count", `${commit}..${base3}`]).trim());
+  if (!Number.isFinite(distance)) return "cannot count commits since the map";
+  if (distance > bounds.maxCommits)
+    return `stale coverage map: ${distance} commits behind the base (max ${bounds.maxCommits})`;
+  const committed = Number(git(repo, ["show", "-s", "--format=%ct", commit]).trim()) * 1e3;
+  const built = createdAt ? Date.parse(createdAt) : NaN;
+  if (!Number.isFinite(committed)) return "cannot read the map commit date";
+  if (createdAt != null && Number.isNaN(built)) return "coverage map build time is not a date";
+  const oldest = Math.min(committed, Number.isNaN(built) ? committed : built);
+  const ageDays = (now - oldest) / 864e5;
+  if (bounds.maxAgeDays > 0 && ageDays > bounds.maxAgeDays)
+    return `stale coverage map: its commit is ${ageDays.toFixed(1)} days old (max ${bounds.maxAgeDays})`;
+  return { commit, distance, ageDays: Math.round(ageDays * 100) / 100 };
+}
+function packageOf(roots, p) {
+  let best = null;
+  for (const r of roots) if (p.startsWith(r + "/") && (!best || r.length > best.length)) best = r;
+  return best;
+}
+function affectedPackages(graph, changes) {
+  if (!graph.length) return null;
+  const roots = graph.map((w) => w.root);
+  const out2 = /* @__PURE__ */ new Set();
+  for (const f of changes.files) {
+    if (f.kind === "ignored" || f.kind === "ci" && !f.runAll) continue;
+    const root = packageOf(roots, f.path);
+    if (!root) return null;
+    for (const r of packageAndDependents(graph, root)) out2.add(r);
+  }
+  return out2;
+}
+function staticSpecs(path, src) {
+  return isPy(path) ? pySpecs(src) : jsSpecs(src);
+}
+function staticReach(tree, changed, isTest, maxFiles, workspaces) {
+  const code3 = tree.paths().filter((p) => (isJs(p) || isPy(p)) && !p.includes("node_modules/"));
+  if (code3.length > maxFiles)
+    return {
+      tests: /* @__PURE__ */ new Map(),
+      exhausted: `${code3.length} code files, over the ${maxFiles} the walk reads`,
+      parsed: 0,
+      orphans: []
+    };
+  tree.prefetch?.(code3);
+  const ctx = { tree, ...workspaces && { workspaces } };
+  const byName = /* @__PURE__ */ new Map();
+  for (const f of code3)
+    for (const n of names(f)) {
+      const l = byName.get(n);
+      if (l) l.push(f);
+      else byName.set(n, [f]);
+    }
+  const importers = /* @__PURE__ */ new Map();
+  const link = (target, from) => {
+    if (target === from) return;
+    const s = importers.get(target);
+    if (s) s.add(from);
+    else importers.set(target, /* @__PURE__ */ new Set([from]));
+  };
+  for (const c of code3) {
+    const specs = staticSpecs(c, tree.read(c) ?? "");
+    if (specs === "unreadable") {
+      for (const t of code3) link(t, c);
+      continue;
+    }
+    for (const spec of specs) {
+      const r = resolveSpecAll(ctx, c, spec);
+      if (r === "external") continue;
+      if (r !== "unknown") {
+        for (const t of r) link(t, c);
+        continue;
+      }
+      const last = (isPy(c) ? spec.split(".") : spec.replace(/\/+$/, "").split("/")).at(-1) ?? "";
+      const stem = last.replace(/^#/, "").replace(/\.[cm]?[jt]sx?$/, "");
+      for (const t of byName.get(stem) ?? []) if (mayBe(r, spec, t)) link(t, c);
+    }
+  }
+  const reach = new Map(changed.map((c) => [c, /* @__PURE__ */ new Set([c])]));
+  const queue = [...changed];
+  for (let i2 = 0; i2 < queue.length; i2++) {
+    const f = queue[i2];
+    const from = reach.get(f);
+    for (const c of importers.get(f) ?? []) {
+      let r = reach.get(c);
+      const before = r?.size ?? -1;
+      if (!r) reach.set(c, r = /* @__PURE__ */ new Set());
+      for (const x of from) r.add(x);
+      if (r.size !== before) queue.push(c);
+    }
+  }
+  const tests = /* @__PURE__ */ new Map();
+  for (const [f, from] of reach) if (isTest(f)) tests.set(f, from);
+  const orphans = changed.filter((f) => !importers.get(f)?.size);
+  return { tests, exhausted: null, parsed: code3.length, orphans };
+}
+var RUNNER_CONFIG = /(^|\/)(vite|vitest|jest|webpack|rollup|babel|rspack)\.(config|workspace)(\.[\w-]+)*\.[cm]?[jt]s(on)?$|(^|\/)\.babelrc(\.json)?$/;
+var ALIAS_OR_PLUGIN = /\b(alias|moduleNameMapper|resolveId|plugins|modulePaths|moduleDirectories)\b/;
+function opaqueRunnerConfigs(tree) {
+  const configs = tree.paths().filter((p) => RUNNER_CONFIG.test(p) && !p.includes("node_modules/"));
+  tree.prefetch?.(configs);
+  return configs.filter((p) => {
+    const src = tree.read(p);
+    return src === null || ALIAS_OR_PLUGIN.test(src);
+  });
+}
+var FIXTURE_DIR = /(^|\/)(tests?|__tests__|fixtures?|__fixtures__|testdata|test-data|__mocks__|__snapshots__)\/|^specs?\//i;
+var POSSIBLE_TEST = /(^|\/)(__tests__|tests?|specs?)\/|(^|[./_-])(test|spec)\.[cm]?[jt]sx?$|(^|\/)test[_-][^/]*\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.py$/;
+function headTests(tree) {
+  return tree.paths().filter((p) => TEST_FILE.test(p) && !p.includes("node_modules/"));
+}
+function planSelection(input) {
+  const t0 = performance.now();
+  const bounds = { ...DEFAULT_BOUNDS, ...input.bounds };
+  const { repo, head, base: base3 } = input;
+  const inScope = input.inScope ?? (() => true);
+  const timings = { mapMs: 0, diffMs: 0, selectMs: 0, staticMs: 0 };
+  const plan = (p) => ({
+    runAll: false,
+    reasons: [],
+    map: null,
+    changes: null,
+    tests: /* @__PURE__ */ new Map(),
+    skipped: [],
+    universe: [],
+    timings,
+    ...p
+  });
+  const everything = (from2, basis2, reasons2, rest = {}) => plan({ runAll: true, reasons: reasons2, basis: basis2, from: from2, ...rest });
+  let mapInfo = null;
+  if (input.map) {
+    const s = mapStaleness(repo, input.map, base3, input.now, input.mapCreatedAt, bounds);
+    timings.mapMs = ms(t0, performance.now());
+    if (typeof s === "string") return everything(base3, "none", [s]);
+    mapInfo = s;
+  }
+  const from = mapInfo?.commit ?? base3;
+  const tree = gitTree(repo, head);
+  const graph = (() => {
+    try {
+      return readWorkspaces(repo, head);
+    } catch {
+      return [];
+    }
+  })();
+  const basis = input.map ? "coverage" : graph.length && input.packageGrain !== false ? "package" : "none";
+  if (basis === "none")
+    return everything(from, "none", [
+      "no coverage map, and not a workspace monorepo (package grain needs one)"
+    ]);
+  const t1 = performance.now();
+  const fileCount = git(repo, ["diff", "--name-only", "-z", "--no-renames", from, head]).split("\0").filter(Boolean).length;
+  if (fileCount > bounds.maxFiles)
+    return everything(
+      from,
+      basis,
+      [`the change since the map touches ${fileCount} files (max ${bounds.maxFiles})`],
+      {
+        map: mapInfo
+      }
+    );
+  const knownTests = /* @__PURE__ */ new Set([...input.map?.tests.keys() ?? [], ...headTests(tree)]);
+  const universeSet = new Set(knownTests);
+  const headFiles = new Set(tree.paths());
+  for (const t of input.allTests ?? [])
+    if (headFiles.has(t) && (knownTests.has(t) || (isJs(t) || isPy(t)) && POSSIBLE_TEST.test(t)))
+      universeSet.add(t);
+  const changes = changesFromGit(repo, from, head, { knownTests, tree });
+  for (const t of changes.changedTests) universeSet.add(t);
+  const t2 = performance.now();
+  timings.diffMs = ms(t1, t2);
+  const reasons = [];
+  for (const t of changes.runAll) reasons.push(`changed ${t.path} (${t.reason})`);
+  const policy = new Set(input.policyFiles ?? []);
+  for (const f of changes.files) if (policy.has(f.path)) reasons.push(`changed ${f.path} (selection policy)`);
+  for (const f of changes.files)
+    if (f.kind === "ignored" && FIXTURE_DIR.test(f.path))
+      reasons.push(`changed ${f.path} (in a test or fixture directory, so a test may read it)`);
+  if (input.map) {
+    const odd = [...input.map.tests.keys()].find((t) => classify(t) !== "test");
+    if (odd) {
+      for (const f of changes.files)
+        if (f.status === "added" && f.kind === "source" && !knownTests.has(f.path))
+          reasons.push(
+            `added ${f.path}: the runner collects tests by its own names (${odd}), so it may be a test`
+          );
+    }
+  }
+  for (const f of changes.files)
+    if (f.status !== "deleted" && (isJs(f.path) || isPy(f.path)) && POSSIBLE_TEST.test(f.path) && !universeSet.has(f.path) && !f.path.includes("node_modules/"))
+      reasons.push(`changed ${f.path}: it may be a test the runner collects by its own names`);
+  const universe = [...universeSet].filter(inScope).sort();
+  if (reasons.length) return everything(from, basis, reasons, { map: mapInfo, changes, universe });
+  const empty = { meta: {}, tests: /* @__PURE__ */ new Map() };
+  const sel = select({ changes, map: input.map ?? empty, allTests: universeSet, always: input.always });
+  const tests = new Map(sel.tests);
+  const add2 = (t, r) => {
+    const rs = tests.get(t);
+    if (rs) rs.push(r);
+    else tests.set(t, [r]);
+  };
+  const affected = affectedPackages(graph, changes);
+  const roots = graph.map((w) => w.root);
+  const inAffected = (t) => {
+    if (!affected) return true;
+    const root = packageOf(roots, t);
+    return !root || affected.has(root);
+  };
+  if (basis === "package")
+    for (const [t, rs] of tests) {
+      if (!rs.every((r) => r.kind === "no-coverage-record")) continue;
+      if (inAffected(t)) tests.set(t, [{ kind: "package-grain", root: packageOf(roots, t) ?? "." }]);
+      else tests.delete(t);
+    }
+  const t3 = performance.now();
+  timings.selectMs = ms(t2, t3);
+  const changedCode = changes.files.filter(
+    (f) => f.status !== "deleted" && (f.kind === "source" || f.kind === "test") && (isJs(f.path) || isPy(f.path))
+  ).map((f) => f.path);
+  if (changedCode.length) {
+    const isTest = (p) => universeSet.has(p) || classify(p, { knownTests }) === "test";
+    const r = staticReach(tree, changedCode, isTest, input.staticMaxFiles ?? 5e4, graph);
+    timings.staticMs = ms(t3, performance.now());
+    if (r.exhausted)
+      return everything(from, basis, [`static graph: ${r.exhausted}`], { map: mapInfo, changes, universe });
+    const testKind = new Set(changes.changedTests);
+    for (const [t, files] of r.tests) {
+      const record = input.map?.tests.get(t);
+      const unseen = [...files].filter((f) => f !== t && (testKind.has(f) || !record?.loaded.has(f)));
+      if (unseen.length && universeSet.has(t)) add2(t, { kind: "static", files: unseen.sort() });
+    }
+  }
+  if (input.map) {
+    for (const f of changes.changedTests)
+      for (const [t, rec] of input.map.tests)
+        if (t !== f && rec.loaded.has(f) && universeSet.has(t)) add2(t, { kind: "module", files: [f] });
+  }
+  if (basis === "package") {
+    const wouldSkip = universe.some((t) => !tests.has(t));
+    const opaque = wouldSkip ? opaqueRunnerConfigs(tree) : [];
+    if (opaque.length)
+      return everything(
+        from,
+        basis,
+        [
+          `no coverage map, and ${opaque.slice(0, 3).join(", ")} declare aliases or plugins the static graph can't read`
+        ],
+        { map: mapInfo, changes, universe }
+      );
+  }
+  const windowMs = (input.historyWindowDays ?? 7) * 864e5;
+  for (const h of input.history ?? []) {
+    const at = Date.parse(h.failedAt);
+    if (Number.isNaN(at) || input.now - at > windowMs || !universeSet.has(h.file) || !inAffected(h.file))
+      continue;
+    add2(h.file, { kind: "history", failedAt: h.failedAt });
+  }
+  for (const t of [...tests.keys()]) if (!inScope(t)) tests.delete(t);
+  const skipped = universe.filter((t) => !tests.has(t));
+  return plan({ basis, from, map: mapInfo, changes, tests, skipped, universe });
 }
 
 // ../engine/src/index.ts
@@ -8378,7 +8972,7 @@ function serviceFor(env, deps) {
 }
 function fullResult(env, inputs, reason, decision) {
   const matrix = inputs?.matrix ?? rawMatrix(env);
-  const cap = shardCap(inputs?.shards ?? rawShards(env), matrix);
+  const cap3 = shardCap(inputs?.shards ?? rawShards(env), matrix);
   return {
     runAll: true,
     reason,
@@ -8387,11 +8981,11 @@ function fullResult(env, inputs, reason, decision) {
     sampled: [],
     quarantined: [],
     quarantine: [],
-    shards: fullRunShards(cap.shards),
+    shards: fullRunShards(cap3.shards),
     matrix,
     pruned: null,
     decision,
-    warnings: cap.capped ? [`shards cut to ${cap.shards} to stay within ${MAX_JOBS} matrix jobs`] : [],
+    warnings: cap3.capped ? [`shards cut to ${cap3.shards} to stay within ${MAX_JOBS} matrix jobs`] : [],
     ms: 0
   };
 }
@@ -8504,7 +9098,7 @@ async function decideLocal(env, deps, svc) {
   const quarantined = toRun.filter((t) => present.has(t));
   const broken = [...tests, ...quarantined].find((t) => /[\r\n]/.test(t));
   if (broken) return full(`a test path contains a line break: ${JSON.stringify(broken)}`, decision);
-  const cap = shardCap(inputs.shards, prunedText);
+  const cap3 = shardCap(inputs.shards, prunedText);
   const result = {
     runAll: false,
     reason: null,
@@ -8513,12 +9107,12 @@ async function decideLocal(env, deps, svc) {
     sampled: decision.sampled,
     quarantined,
     quarantine: applied.filter((e) => quarantined.includes(e.file)),
-    shards: tests.length ? balanceShards(tests, decision.durations ?? /* @__PURE__ */ new Map(), cap.shards) : [],
+    shards: tests.length ? balanceShards(tests, decision.durations ?? /* @__PURE__ */ new Map(), cap3.shards) : [],
     matrix: prunedText,
     pruned,
     decision,
     warnings: [
-      ...cap.capped ? [`shards cut to ${cap.shards} to stay within ${MAX_JOBS} matrix jobs`] : [],
+      ...cap3.capped ? [`shards cut to ${cap3.shards} to stay within ${MAX_JOBS} matrix jobs`] : [],
       ...quarantineWarnings
     ],
     ms: 0
@@ -8680,17 +9274,17 @@ function workflowFile(env) {
   return m ? m[1] : "";
 }
 function jobIdentity(env) {
-  const job2 = env.GITHUB_JOB || "job";
+  const job = env.GITHUB_JOB || "job";
   const wf = workflowFile(env);
-  return fitLine(wf ? `${wf}:${job2}` : job2, JOB_MAX);
+  return fitLine(wf ? `${wf}:${job}` : job, JOB_MAX);
 }
 function artifactName(env, matrixRaw) {
-  const job2 = env.GITHUB_JOB || "job";
+  const job = env.GITHUB_JOB || "job";
   const key = matrixKeyOf(matrixRaw);
   const id = sha1(
-    [env.GITHUB_WORKFLOW_REF ?? "", job2, matrixRaw.trim(), env.GITHUB_RUN_ATTEMPT ?? "1"].join("\0")
+    [env.GITHUB_WORKFLOW_REF ?? "", job, matrixRaw.trim(), env.GITHUB_RUN_ATTEMPT ?? "1"].join("\0")
   ).slice(0, 10);
-  return [EVIDENCE_PREFIX + slug(job2, 60), ...key ? [slug(key, 60)] : [], id].join("-");
+  return [EVIDENCE_PREFIX + slug(job, 60), ...key ? [slug(key, 60)] : [], id].join("-");
 }
 
 // src/limits.ts
@@ -9082,10 +9676,984 @@ function mainStart(env, sink) {
   return 0;
 }
 
-// src/upload.ts
+// src/step/outcome.ts
+import { createHash as createHash5 } from "node:crypto";
+import { existsSync, mkdirSync as mkdirSync3, readFileSync as readFileSync5, statSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve3 } from "node:path";
+
+// ../flaky/src/results.ts
+var RANK = { passed: 0, retried: 1, failed: 2 };
+var combine = (a, b) => RANK[a] >= RANK[b] ? a : b;
+var slashes = (p) => p.replace(/\\/g, "/");
+function relative2(path, root) {
+  let p = slashes(path);
+  if (root) {
+    const r = slashes(root).replace(/\/?$/, "/");
+    if (p.startsWith(r)) p = p.slice(r.length);
+  }
+  return p.replace(/^\.\//, "");
+}
+var Collector = class {
+  byId = /* @__PURE__ */ new Map();
+  add(file, name2, outcome) {
+    if (!outcome) return;
+    const id = `${file} > ${name2}`;
+    const r = this.byId.get(id);
+    if (r) r.outcome = combine(r.outcome, outcome);
+    else this.byId.set(id, { id, file, name: name2, outcome });
+  }
+  done() {
+    return [...this.byId.values()];
+  }
+};
+function jsonOutcome(a) {
+  if (a.status === "failed") return "failed";
+  if (a.status !== "passed") return null;
+  return a.retryReasons?.length || a.failureMessages?.length ? "retried" : "passed";
+}
+function fromJson(report, opts) {
+  if (!Array.isArray(report.testResults)) throw new Error("not a Vitest/Jest JSON report (no testResults)");
+  const out2 = new Collector();
+  for (const file of report.testResults) {
+    if (typeof file.name !== "string") continue;
+    const path = relative2(file.name, opts.root);
+    const cases = file.assertionResults ?? [];
+    for (const a of cases) {
+      const name2 = a.fullName || [...a.ancestorTitles ?? [], a.title ?? ""].filter(Boolean).join(" ");
+      out2.add(path, name2, jsonOutcome(a));
+    }
+    if (file.status === "failed" && !cases.some((a) => a.status === "failed"))
+      out2.add(path, "(file)", "failed");
+  }
+  return out2.done();
+}
+var ENTITIES = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
+function decode(s) {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (m, e) => {
+    if (e[0] === "#") {
+      const n = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : m;
+    }
+    return ENTITIES[e.toLowerCase()] ?? m;
+  });
+}
+function attrs(s) {
+  const out2 = {};
+  for (const m of s.matchAll(/([^\s=/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g))
+    out2[m[1]] = decode(m[2] ?? m[3] ?? "");
+  return out2;
+}
+var looksLikePath = (s) => !!s && (/[/\\]/.test(s) || /\.(?:[cm]?[jt]sx?|py|java|kt|scala|groovy)$/.test(s));
+var CLASS_EXTS = [".py", ".java", ".kt", ".scala", ".groovy"];
+function classResolver(files) {
+  if (!files) return () => null;
+  const byBase = /* @__PURE__ */ new Map();
+  for (const f of files) {
+    const b = f.slice(f.lastIndexOf("/") + 1);
+    byBase.set(b, [...byBase.get(b) ?? [], f]);
+  }
+  return (cls) => {
+    const parts2 = cls.split(".");
+    for (let n = parts2.length; n >= 1; n--) {
+      const stem = parts2.slice(0, n).join("/");
+      for (const ext of CLASS_EXTS) {
+        const want = stem + ext;
+        const hits = (byBase.get(parts2[n - 1] + ext) ?? []).filter(
+          (f) => f === want || f.endsWith("/" + want)
+        );
+        if (hits.length === 1) return hits[0];
+        if (hits.length > 1) return null;
+      }
+    }
+    return null;
+  };
+}
+var SKIP = [
+  ["<!--", "-->"],
+  ["<![CDATA[", "]]>"],
+  ["<?", "?>"],
+  ["<!DOCTYPE", ">"]
+];
+function stripMarkup(xml) {
+  const out2 = [];
+  let start2 = 0;
+  let i2 = 0;
+  for (; ; ) {
+    const lt = xml.indexOf("<", i2);
+    if (lt < 0) break;
+    const m = SKIP.find(([open]) => xml.startsWith(open, lt));
+    if (!m) {
+      i2 = lt + 1;
+      continue;
+    }
+    out2.push(xml.slice(start2, lt));
+    const end = xml.indexOf(m[1], lt + m[0].length);
+    if (end < 0) return out2.join("");
+    start2 = i2 = end + m[1].length;
+  }
+  out2.push(xml.slice(start2));
+  return out2.join("");
+}
+function fromJunit(xml, opts) {
+  const body2 = stripMarkup(xml);
+  if (!/<testsuites?[\s>]/.test(body2)) throw new Error("not a JUnit XML report (no <testsuite>)");
+  const resolveClass = classResolver(opts.files);
+  const out2 = new Collector();
+  const suites = [];
+  let tc = null;
+  const finish = () => {
+    if (!tc) return;
+    const suite = suites[suites.length - 1] ?? {};
+    const { classname, name: name2 = "" } = tc.a;
+    const rawFile = [tc.a.file, suite.file, classname, suite.name].find(looksLikePath) ?? (classname && resolveClass(classname)) ?? classname ?? suite.name ?? "";
+    const file = relative2(rawFile, opts.root);
+    const prefix = classname && !looksLikePath(classname) && !name2.startsWith(classname) ? `${classname} > ` : "";
+    const outcome = tc.failed ? "failed" : tc.skipped ? null : tc.reran ? "retried" : "passed";
+    out2.add(file, prefix + name2, outcome);
+    tc = null;
+  };
+  for (const m of body2.matchAll(/<(\/?)([\w:.-]+)((?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g)) {
+    const [, close, tag, rest = "", selfClose] = m;
+    if (tag === "testsuite") {
+      if (close) suites.pop();
+      else if (!selfClose) suites.push(attrs(rest));
+    } else if (tag === "testcase") {
+      if (close) finish();
+      else {
+        finish();
+        tc = { a: attrs(rest), failed: false, skipped: false, reran: false };
+        if (selfClose) finish();
+      }
+    } else if (tc && !close) {
+      if (tag === "failure" || tag === "error") tc.failed = true;
+      else if (tag === "skipped") tc.skipped = true;
+      else if (/^(flaky|rerun)(Failure|Error)$/.test(tag)) tc.reran = true;
+    }
+  }
+  finish();
+  return out2.done();
+}
+function parseResults(text, opts = {}) {
+  const t = text.trimStart();
+  return t.startsWith("<") ? fromJunit(t, opts) : fromJson(JSON.parse(t), opts);
+}
+
+// ../ledger/src/contract.ts
 import { createHash as createHash4 } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync as readFileSync5 } from "node:fs";
-import { basename, join as join2 } from "node:path";
+var LIMITS = {
+  /** Test results in one upload. A bigger suite sends several parts. */
+  testsPerUpload: 5e4,
+  /** Raw body bytes of one upload. */
+  uploadBytes: 8 * 1024 * 1024,
+  /** Parts per (run, attempt, job, matrix). */
+  partsPerJob: 64,
+  testIdChars: 1e3,
+  fileChars: 500,
+  jobKeyChars: 200,
+  /** Canonical JSON of the matrix values. */
+  matrixChars: 2e3,
+  steps: 200,
+  /** One test (or step) longer than this is a clock error. */
+  durationMs: 24 * 3600 * 1e3
+};
+var isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (isObj(v))
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(",")}}`;
+  return JSON.stringify(v ?? null);
+}
+function matrixKey(matrix) {
+  if (matrix === void 0) return "?";
+  const c = canonicalJson(matrix ?? {});
+  return c.length <= 64 ? c : `h:${createHash4("sha256").update(c).digest("hex").slice(0, 32)}`;
+}
+var sha2562 = (s) => createHash4("sha256").update(s).digest("hex");
+
+// src/step/records.ts
+var DECISION_SCHEMA = "tensile.selection-decision";
+var RECORD_SCHEMA = "tensile.selection-record";
+var STEP_POLICY_VERSION = "select-step@1";
+var MAX_PROPOSED_BYTES = 48 * 1024;
+function unknownFreshness(reason) {
+  return { watermark: null, lagMs: Number.MAX_SAFE_INTEGER, stale: true, complete: false, reasons: [reason] };
+}
+function barKey(p) {
+  const wf = /^[^/]+\/[^/]+\/(.+?)@/.exec(p.workflowRef)?.[1] ?? "?";
+  const scope = sha2562(JSON.stringify([p.root, [...p.testPaths].sort(), [...p.always].sort()])).slice(0, 12);
+  return `${wf}#${p.job}#${p.runner}#${scope}#${STEP_POLICY_VERSION}`;
+}
+var jobKey = (d) => `${d.run.id}/${d.run.attempt}/${d.run.job}/${matrixKey(d.matrix)}`;
+var subjectId = (d) => d.checkRunId ? String(d.checkRunId) : jobKey(d);
+function ledgerDecision(d) {
+  const selected = d.selected.map((s) => s.test);
+  const lists = { selected, sampled: d.sampled };
+  const base3 = {
+    runAll: d.runAll,
+    reasons: d.reasons.slice(0, 20),
+    basis: d.basis,
+    mapVerified: d.map?.verified ?? false,
+    // The control room's fields (control-plane.md module 8).
+    enforceable: d.enforceable,
+    enforceBlockers: d.enforceBlockers.slice(0, 10),
+    skippedShare: d.runAll ? 0 : Math.round(d.skippedShare * 1e4) / 1e4,
+    skippedShareBasis: d.skippedShareBasis,
+    testStep: d.testStep,
+    runner: d.runner,
+    barKey: d.barKey,
+    counts: {
+      universe: d.universe,
+      selected: selected.length,
+      sampled: d.sampled.length,
+      skipped: d.skipped.length
+    },
+    skippedSha256: sha2562(d.skipped.join("\n")),
+    selectedSha256: sha2562(selected.join("\n"))
+  };
+  const withLists = { ...base3, ...lists, listsComplete: true };
+  const proposed = Buffer.byteLength(JSON.stringify(withLists)) <= MAX_PROPOSED_BYTES ? withLists : { ...base3, selected: null, sampled: null, listsComplete: false };
+  const enforced = d.mode === "enforce";
+  return {
+    module: "smart_execution",
+    kind: "select",
+    repoId: Number(d.repoId) || 0,
+    subject: { type: "job", id: subjectId(d) },
+    headSha: d.head,
+    prNumber: d.prNumber,
+    mode: d.mode,
+    proposed,
+    safeDefault: d.runAll,
+    // Enforcing, the job ran what was proposed (the selected and sampled tests, or everything).
+    applied: enforced ? { runAll: d.runAll, ran: d.runAll ? "everything" : "selected+sampled" } : null,
+    inputs: {
+      freshness: d.ledger ?? unknownFreshness("no ledger read: the step had no service"),
+      refs: {
+        map: d.map,
+        base: d.base,
+        from: d.from,
+        head: d.head,
+        event: d.event,
+        ref: d.ref,
+        run: d.run,
+        matrix: d.matrix === void 0 ? "?" : canonicalJson(d.matrix),
+        requestedMode: d.requestedMode,
+        modeReason: d.modeReason
+      }
+    },
+    policyVersion: STEP_POLICY_VERSION,
+    idempotencyKey: `select:${jobKey(d)}`
+  };
+}
+var cap = (xs, n = 200) => xs.slice(0, n);
+function judge(d, report, testOutcome, reportSha256) {
+  const kind = d.mode === "enforce" && !d.runAll ? "selected_run" : "full_suite";
+  const evidence = { reportSha256, run: d.run };
+  const empty = {
+    failed: [],
+    missed: [],
+    sampledMisses: [],
+    unseenSkipped: d.skipped.length,
+    unknownTests: [],
+    reportTests: 0,
+    testOutcome
+  };
+  if (!report)
+    return { kind, verdict: "unknown", observed: empty, evidence, note: "no readable test report" };
+  const failed = [...new Set(report.failed)].sort();
+  const seen = new Set(report.seen);
+  const selected = new Set(d.selected.map((s) => s.test));
+  const sampled = new Set(d.sampled);
+  const skipped = new Set(d.skipped);
+  const missed = d.runAll ? [] : failed.filter((f) => skipped.has(f) || !selected.has(f) && !sampled.has(f));
+  const sampledMisses = d.runAll ? [] : failed.filter((f) => sampled.has(f));
+  const unseenSkipped = d.runAll ? 0 : d.skipped.filter((t) => !seen.has(t)).length;
+  const unknownTests = d.runAll ? [] : [...seen].filter((t) => !selected.has(t) && !sampled.has(t) && !skipped.has(t)).sort();
+  const observed = {
+    failed: cap(failed),
+    missed: cap(missed),
+    sampledMisses: cap(sampledMisses),
+    unseenSkipped,
+    unknownTests: cap(unknownTests),
+    reportTests: seen.size,
+    testOutcome
+  };
+  const out2 = (verdict, note) => ({
+    kind,
+    verdict,
+    observed,
+    evidence,
+    ...note && { note }
+  });
+  if (kind === "selected_run") {
+    if (sampledMisses.length) return out2("miss");
+    return out2("unknown", "enforced: skipped tests did not run; the main safety net judges them");
+  }
+  if (missed.length) return out2("miss");
+  if (!seen.size) return out2("unknown", "the report lists no tests");
+  if (testOutcome && testOutcome !== "success" && !failed.length)
+    return out2("unknown", `the test step concluded ${testOutcome} but the report lists no failure`);
+  if (d.runAll) return out2("correct");
+  if (unseenSkipped) return out2("unknown", `${unseenSkipped} skipped tests are not in the report`);
+  if (unknownTests.length)
+    return out2(
+      "unknown",
+      `${unknownTests.length} test files in the report are unknown to selection (${unknownTests[0]}): it can't vouch for the suite`
+    );
+  return out2("correct");
+}
+function selectionRecord(d, outcomes) {
+  return { schema: RECORD_SCHEMA, version: 1, decision: ledgerDecision(d), outcomes };
+}
+
+// src/step/summary.ts
+var esc2 = (s) => s.replace(/[&<>"'|`]/g, (c) => `&#${c.charCodeAt(0)};`).replace(/\r?\n/g, " ");
+var code2 = (s) => `<code>${esc2(s)}</code>`;
+var list2 = (xs, n = 3) => xs.slice(0, n).map(code2).join(", ") + (xs.length > n ? ` and ${xs.length - n} more` : "");
+var MAX_ROWS2 = 200;
+var MAX_BYTES2 = 9e5;
+function describePlanReason(r) {
+  switch (r.kind) {
+    case "static":
+      return `its static imports reach ${list2(r.files)}`;
+    case "history":
+      return `failed recently (${esc2(r.failedAt.slice(0, 10))}) in an affected package`;
+    case "package-grain":
+      return `no coverage map; ${code2(r.root)} is affected`;
+    default:
+      return describeReason(r);
+  }
+}
+function cap2(md) {
+  return Buffer.byteLength(md) > MAX_BYTES2 ? md.slice(0, MAX_BYTES2) + "\n\n(truncated)\n" : md;
+}
+function renderDecision(d) {
+  const out2 = [`### Tensile selection (${d.mode})`, ""];
+  const total = d.universe;
+  const runs = d.selected.length + d.sampled.length;
+  if (d.runAll) out2.push(`**Runs everything:** ${esc2(d.reasons.join("; ") || "no reason recorded")}`, "");
+  else if (d.mode === "enforce")
+    out2.push(
+      `Runs **${runs} of ${total}** test files (${d.sampled.length} sampled as a check); skips ${d.skipped.length}.`,
+      ""
+    );
+  else
+    out2.push(
+      `Everything runs (shadow). Selection would run **${runs} of ${total}** test files and skip ${d.skipped.length}.`,
+      ""
+    );
+  if (d.modeReason) out2.push(`Not enforcing: ${esc2(d.modeReason)}.`, "");
+  if (d.map)
+    out2.push(
+      `Map: ${code2(d.map.source)}${d.map.commit ? ` at ${code2(d.map.commit.slice(0, 10))}` : ""}, ${d.map.verified ? `signature verified (key ${code2(d.map.keyId ?? "")})` : `**unverified**${d.map.problem ? ` (${esc2(d.map.problem)})` : ""}`}${d.map.distance !== null ? `, ${d.map.distance} commits behind the base` : ""}.`,
+      ""
+    );
+  else if (!d.runAll) out2.push(`No coverage map: ${esc2(d.basis)} grain.`, "");
+  if (!d.runAll && d.selected.length) {
+    out2.push("<details><summary>Selected tests and why</summary>", "", "| Test | Why |", "| --- | --- |");
+    for (const s of d.selected.slice(0, MAX_ROWS2))
+      out2.push(`| ${code2(s.test)} | ${s.reasons.map(describePlanReason).join("; ")} |`);
+    if (d.selected.length > MAX_ROWS2) out2.push(`| \u2026 | ${d.selected.length - MAX_ROWS2} more |`);
+    out2.push("", "</details>", "");
+  }
+  const t = d.timings;
+  if (t.stepMs !== void 0) out2.push(`Decided in ${t.stepMs} ms.`, "");
+  return cap2(out2.join("\n"));
+}
+function renderOutcome(d, o) {
+  const out2 = ["### Tensile selection: outcome", ""];
+  const o2 = o.observed;
+  if (o.verdict === "miss")
+    out2.push(
+      `**Miss:** selection ${d.mode === "enforce" ? "skipped" : "would have skipped"} failing test file(s) ${list2(o2.missed.length ? o2.missed : o2.sampledMisses, 10)}.`,
+      ""
+    );
+  else if (o.verdict === "correct")
+    out2.push(
+      d.runAll ? "Nothing was skipped, so nothing could be missed." : `No miss: ${o2.failed.length} failing test file(s), all selected; every skipped test passed.`,
+      ""
+    );
+  else out2.push(`Unknown: ${esc2(o.note ?? "not enough evidence")}.`, "");
+  out2.push(`Verdict \`${o.verdict}\` (${o.kind}), recorded for the ledger.`, "");
+  return cap2(out2.join("\n"));
+}
+
+// src/step/outcome.ts
+var MAX_REPORT_BYTES = 64 * 1024 * 1024;
+var recordPath = (decisionFile) => join2(dirname3(decisionFile), "selection-record.json");
+function readDecision(file) {
+  const d = JSON.parse(readFileSync5(file, "utf8"));
+  if (d?.schema !== DECISION_SCHEMA || d.version !== 1)
+    throw new Error(`${file} is not a selection decision`);
+  return d;
+}
+function readReports(paths, repo, root) {
+  const hash = createHash5("sha256");
+  const failed = /* @__PURE__ */ new Set();
+  const seen = /* @__PURE__ */ new Set();
+  let any = false;
+  const repoRoot = resolve3(repo).replace(/\\/g, "/").replace(/\/?$/, "/");
+  const prefix = root.replace(/^\.\/?/, "").replace(/\/+$/, "");
+  for (const p of paths) {
+    const abs = isAbsolute3(p) ? p : resolve3(repo, p);
+    if (!existsSync(abs)) continue;
+    if (statSync(abs).size > MAX_REPORT_BYTES) throw new Error(`${p} is over ${MAX_REPORT_BYTES} bytes`);
+    const buf = readFileSync5(abs);
+    hash.update(buf);
+    for (const r of parseResults(buf.toString("utf8"), { root: repoRoot })) {
+      const file = prefix && !r.file.startsWith(prefix + "/") && !r.file.startsWith("/") ? `${prefix}/${r.file}` : r.file;
+      seen.add(file);
+      if (r.outcome === "failed") failed.add(file);
+    }
+    any = true;
+  }
+  if (!any) return null;
+  return { tests: { failed: [...failed].sort(), seen: [...seen].sort() }, sha256: hash.digest("hex") };
+}
+var lines = (s) => s.split("\n").map((x) => x.trim()).filter(Boolean);
+function runOutcomePhase(env, sink, decisionFile) {
+  let d;
+  try {
+    d = readDecision(decisionFile);
+  } catch (e) {
+    sink.warning(`no selection decision to judge (${e.message})`);
+    return null;
+  }
+  const repo = getInput(env, "working-directory") || env.GITHUB_WORKSPACE || ".";
+  const testOutcome = getInput(env, "test-outcome") || null;
+  let report = null;
+  try {
+    report = readReports(lines(getInput(env, "report")), repo, d.root);
+  } catch (e) {
+    sink.warning(`test report unreadable: ${e.message}`);
+  }
+  const outcome = judge(d, report?.tests ?? null, testOutcome, report?.sha256 ?? null);
+  const record = selectionRecord(d, [outcome]);
+  const out2 = recordPath(decisionFile);
+  try {
+    mkdirSync3(dirname3(out2), { recursive: true });
+    writeFileSync3(out2, JSON.stringify(record) + "\n");
+  } catch (e) {
+    sink.warning(`could not write the selection record: ${e.message}`);
+  }
+  sink.outputs([
+    ["record-file", out2],
+    ["verdict", outcome.verdict],
+    ["missed", JSON.stringify(outcome.observed.missed)]
+  ]);
+  if (outcome.verdict === "miss")
+    sink.warning(
+      `selection would have missed failing test file(s): ${outcome.observed.missed.slice(0, 5).join(", ")}`
+    );
+  try {
+    sink.summary(renderOutcome(d, outcome));
+  } catch (e) {
+    sink.warning(`could not write the job summary: ${e.message}`);
+  }
+  return record;
+}
+function runPost(env, sink) {
+  const decisionFile = env.STATE_decision;
+  if (!decisionFile || !getInput(env, "report")) return;
+  if (existsSync(recordPath(decisionFile))) return;
+  runOutcomePhase(env, sink, decisionFile);
+}
+
+// src/step/select.ts
+import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname4, join as join3, resolve as resolve4 } from "node:path";
+
+// ../ledger/src/signing.ts
+import {
+  createHash as createHash6,
+  createPrivateKey,
+  createPublicKey,
+  sign as edSign,
+  verify as edVerify
+} from "node:crypto";
+var MAP_FORMAT = "jiffy.map.gz/1";
+var MAP_CLAIMS_VERSION = 1;
+var KID = /^[A-Za-z0-9_.-]{1,64}$/;
+function mapPublicKey(kid, key) {
+  if (!KID.test(kid)) throw new Error("map key id must be 1-64 of [A-Za-z0-9_.-]");
+  let k;
+  if (typeof key === "object") k = createPublicKey({ key: { ...key }, format: "jwk" });
+  else if (key.trim().startsWith("-----")) k = createPublicKey(key.trim());
+  else k = createPublicKey({ key: Buffer.from(key.trim(), "base64"), format: "der", type: "spki" });
+  if (k.asymmetricKeyType !== "ed25519") throw new Error(`map key ${kid} is not an Ed25519 key`);
+  return { kid, publicKey: k };
+}
+function mapSha256(bytes) {
+  return createHash6("sha256").update(bytes).digest("hex");
+}
+var MAX_CLAIMS_CHARS = 4096;
+var HEX40 = /^[0-9a-f]{40}$/;
+var HEX64 = /^[0-9a-f]{64}$/;
+function verifyMap(keys, signed, expect) {
+  const no = (reason) => ({ ok: false, reason });
+  if (!signed || typeof signed !== "object") return no("no signature");
+  const { claims: text, signature } = signed;
+  if (typeof text !== "string" || typeof signature !== "string") return no("no signature");
+  if (text.length > MAX_CLAIMS_CHARS || signature.length > 200) return no("signature too large");
+  let c;
+  try {
+    c = JSON.parse(text);
+  } catch {
+    return no("claims are not JSON");
+  }
+  if (!c || typeof c !== "object" || Array.isArray(c)) return no("claims are not an object");
+  if (c.v !== MAP_CLAIMS_VERSION) return no(`claims version ${String(c.v)} is not ${MAP_CLAIMS_VERSION}`);
+  if (canonicalJson(c) !== text) return no("claims are not canonical");
+  const key = keys.find((k) => k.kid === c.kid);
+  if (!key) return no(`unknown signing key ${String(c.kid)}`);
+  let good = false;
+  try {
+    good = edVerify(null, Buffer.from(text), key.publicKey, Buffer.from(signature, "base64url"));
+  } catch {
+    good = false;
+  }
+  if (!good) return no("bad signature");
+  if (typeof c.host !== "string" || c.host.toLowerCase() !== expect.host.toLowerCase())
+    return no(`map is for host ${String(c.host)}, not ${expect.host}`);
+  if (c.repoId !== expect.repoId) return no(`map is for repo ${String(c.repoId)}, not ${expect.repoId}`);
+  if (expect.tenant !== void 0 && c.tenant !== expect.tenant) return no("map is for another tenant");
+  if (typeof c.sha !== "string" || !HEX40.test(c.sha)) return no("map commit is not a sha");
+  if (expect.sha !== void 0 && c.sha !== expect.sha) return no(`map is for ${c.sha}, not ${expect.sha}`);
+  if (typeof c.mapSha256 !== "string" || !HEX64.test(c.mapSha256)) return no("map hash is not a sha256");
+  if (expect.mapSha256 !== void 0 && c.mapSha256 !== expect.mapSha256)
+    return no("map bytes do not match the signed hash");
+  if (c.format !== MAP_FORMAT) return no(`map format ${String(c.format)} is not ${MAP_FORMAT}`);
+  const at = Date.parse(c.createdAt);
+  if (!Number.isFinite(at)) return no("map has no signing time");
+  const now = (expect.now ?? /* @__PURE__ */ new Date()).getTime();
+  if (at > now + 6e4) return no("map signing time is in the future");
+  if (expect.maxAgeMs !== void 0 && now - at > expect.maxAgeMs)
+    return no(
+      `map signed ${Math.round((now - at) / 1e3)}s ago, over the ${Math.round(expect.maxAgeMs / 1e3)}s bound`
+    );
+  return { ok: true, claims: c };
+}
+
+// src/step/keys.ts
+var PINNED_MAP_KEYS = Object.freeze([]);
+var KEY_ORIGIN = "https://jiffy-app-production.up.railway.app";
+var KID2 = /^[A-Za-z0-9_.-]{1,64}$/;
+var X = /^[A-Za-z0-9_-]{43}$/;
+var MAX_KEYS_BYTES = 64 * 1024;
+function toMapKeys(keys) {
+  const out2 = [];
+  for (const k of keys) {
+    if (!KID2.test(k.kid) || !X.test(k.x)) continue;
+    try {
+      out2.push(mapPublicKey(k.kid, { kty: "OKP", crv: "Ed25519", x: k.x }));
+    } catch {
+    }
+  }
+  return out2;
+}
+function parsePublishedKeys(json) {
+  const keys = json && typeof json === "object" ? json.keys : void 0;
+  if (!Array.isArray(keys)) return [];
+  const out2 = [];
+  for (const k of keys.slice(0, 32)) {
+    if (!k || typeof k !== "object") continue;
+    const j = k;
+    if (j.kty !== "OKP" || j.crv !== "Ed25519") continue;
+    if (j.status !== "active" && j.status !== "verify") continue;
+    if (typeof j.kid !== "string" || typeof j.x !== "string" || !KID2.test(j.kid) || !X.test(j.x)) continue;
+    out2.push({ kid: j.kid, x: j.x });
+  }
+  return out2;
+}
+async function fetchPublishedKeys(origin, timeoutMs = 5e3) {
+  try {
+    const u = new URL("/v1/keys", origin);
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+    if (u.protocol !== "https:" && !(u.protocol === "http:" && local)) return [];
+    const res = await fetch(u, { signal: AbortSignal.timeout(timeoutMs), redirect: "error" });
+    if (!res.ok) return [];
+    const text = await res.text();
+    if (text.length > MAX_KEYS_BYTES) return [];
+    return parsePublishedKeys(JSON.parse(text));
+  } catch {
+    return [];
+  }
+}
+
+// src/step/native.ts
+var RUNNERS = ["vitest", "jest", "node-test", "pytest"];
+var EXTS = {
+  vitest: /\.[cm]?[jt]sx?$/,
+  jest: /\.[cm]?[jt]sx?$/,
+  "node-test": /\.[cm]?[jt]sx?$/,
+  pytest: /\.py$/
+};
+var runsFile = (runner, path) => EXTS[runner].test(path);
+function shellQuote(s) {
+  return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+function underRoot(root, path) {
+  const r = root.replace(/^\.\/?/, "").replace(/\/+$/, "");
+  if (!r) return path;
+  return path.startsWith(r + "/") ? path.slice(r.length + 1) : null;
+}
+function unsafeForRunner(runner, files) {
+  const dash = files.find((f) => f.startsWith("-"));
+  if (dash) return `${JSON.stringify(dash)} would read as an option`;
+  if (runner === "node-test") {
+    const glob = files.find((f) => /[*?[\]{}!]/.test(f));
+    if (glob) return `node --test reads ${JSON.stringify(glob)} as a glob`;
+  }
+  return null;
+}
+function nativeArgs(runner, root, tests) {
+  const files = [
+    ...new Set(
+      [...tests].filter((t) => runsFile(runner, t)).map((t) => underRoot(root, t)).filter((t) => t !== null)
+    )
+  ].sort();
+  if (!files.length) return { files, args: "" };
+  const quoted = files.map(shellQuote);
+  switch (runner) {
+    case "vitest":
+      return { files, args: quoted.join(" ") };
+    case "jest":
+      return { files, args: ["--runTestsByPath", ...quoted].join(" ") };
+    case "node-test":
+      return { files, args: quoted.join(" ") };
+    case "pytest":
+      return { files, args: quoted.join(" ") };
+  }
+}
+
+// src/step/select.ts
+var lines2 = (s) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+function num(name2, raw2, dflt, min, integer = false) {
+  if (!raw2) return dflt;
+  const n = Number(raw2);
+  if (!Number.isFinite(n) || n < min || integer && !Number.isInteger(n))
+    throw new InputError(
+      `input ${name2} must be ${integer ? "an integer" : "a number"} >= ${min}, got ${raw2}`
+    );
+  return n;
+}
+function defaultPolicyFiles(env) {
+  const out2 = [".github/tensile.yml", ".github/tensile.yaml", "jiffy.yml", ".jiffy.yml", ".github/jiffy.yml"];
+  const m = /^[^/]+\/[^/]+\/(.+?)@/.exec(env.GITHUB_WORKFLOW_REF ?? "");
+  if (m) out2.push(m[1]);
+  return out2;
+}
+function decisionPath(env) {
+  return resolve4(
+    process.cwd(),
+    getInput(env, "decision-file") || join3(env.RUNNER_TEMP || ".tensile", "tensile", "selection-decision.json")
+  );
+}
+function parseStepInputs(env) {
+  const mode = getInput(env, "mode") || "shadow";
+  if (mode !== "shadow" && mode !== "enforce")
+    throw new InputError(
+      `input mode must be shadow or enforce for the in-job step, got ${JSON.stringify(mode)}`
+    );
+  const runner = getInput(env, "runner") || "vitest";
+  if (!RUNNERS.includes(runner))
+    throw new InputError(`input runner must be one of ${RUNNERS.join(", ")}, got ${JSON.stringify(runner)}`);
+  const map = getInput(env, "map");
+  let matrix;
+  const rawMatrix2 = getInput(env, "matrix-key");
+  if (rawMatrix2) {
+    try {
+      const v = JSON.parse(rawMatrix2);
+      if (v !== null && (typeof v !== "object" || Array.isArray(v))) throw new Error("not an object");
+      matrix = v;
+    } catch (e) {
+      throw new InputError(`input matrix-key must be toJSON(matrix): ${e.message}`);
+    }
+  }
+  return {
+    mode,
+    runner,
+    root: getInput(env, "root"),
+    map,
+    mapSignature: getInput(env, "map-signature") || (map ? `${map}.sig.json` : ""),
+    serviceUrl: parseServiceUrl(getInput(env, "service-url")),
+    testPaths: lines2(getInput(env, "test-paths")),
+    always: lines2(getInput(env, "always")),
+    policyFiles: [...defaultPolicyFiles(env), ...lines2(getInput(env, "policy-files"))],
+    durations: getInput(env, "durations"),
+    history: getInput(env, "history"),
+    maxMapCommits: num("max-map-commits", getInput(env, "max-map-commits"), 200, 0, true),
+    maxMapAgeDays: num("max-map-age-days", getInput(env, "max-map-age-days"), 14, 0),
+    timeoutSeconds: num("timeout-seconds", getInput(env, "timeout-seconds"), 60, 1),
+    sampleRate: (() => {
+      try {
+        return parseRate(getInput(env, "sample-rate") || "5%");
+      } catch (e) {
+        throw new InputError(`input sample-rate ${e.message}`);
+      }
+    })(),
+    workingDirectory: getInput(env, "working-directory") || env.GITHUB_WORKSPACE || ".",
+    decisionFile: decisionPath(env),
+    checkRunId: (() => {
+      const raw2 = getInput(env, "check-run-id");
+      if (!raw2) return null;
+      if (!/^\d{1,19}$/.test(raw2))
+        throw new InputError(`input check-run-id must be job.check_run_id, got ${raw2}`);
+      return Number(raw2);
+    })(),
+    testStep: getInput(env, "test-step"),
+    ...matrix !== void 0 && { matrix }
+  };
+}
+var ARGS_BUDGET = 200 * 1024;
+function baseDecision(env, inputs, event) {
+  return {
+    schema: DECISION_SCHEMA,
+    version: 1,
+    repository: env.GITHUB_REPOSITORY ?? "",
+    repoId: env.GITHUB_REPOSITORY_ID ?? "",
+    ownerId: env.GITHUB_REPOSITORY_OWNER_ID ?? "",
+    host: (() => {
+      try {
+        return new URL(env.GITHUB_SERVER_URL || "https://github.com").host.toLowerCase();
+      } catch {
+        return "";
+      }
+    })(),
+    event: env.GITHUB_EVENT_NAME ?? "",
+    ref: env.GITHUB_REF ?? "",
+    prNumber: event.pull_request?.number ?? null,
+    run: {
+      id: env.GITHUB_RUN_ID ?? "",
+      attempt: Number(env.GITHUB_RUN_ATTEMPT ?? 1) || 1,
+      job: env.GITHUB_JOB ?? "",
+      workflowRef: env.GITHUB_WORKFLOW_REF ?? ""
+    },
+    ...inputs?.matrix !== void 0 && { matrix: inputs.matrix },
+    head: env.GITHUB_SHA ?? null,
+    base: null,
+    from: null,
+    requestedMode: inputs?.mode ?? "shadow",
+    mode: "shadow",
+    modeReason: null,
+    runAll: true,
+    reasons: [],
+    basis: "none",
+    map: null,
+    ledger: null,
+    runner: inputs?.runner ?? "vitest",
+    root: inputs?.root ?? "",
+    barKey: barKey({
+      workflowRef: env.GITHUB_WORKFLOW_REF ?? "",
+      job: env.GITHUB_JOB ?? "",
+      runner: inputs?.runner ?? "vitest",
+      root: inputs?.root ?? "",
+      testPaths: inputs?.testPaths ?? [],
+      always: inputs?.always ?? []
+    }),
+    checkRunId: inputs?.checkRunId ?? null,
+    testStep: inputs?.testStep || null,
+    enforceable: false,
+    enforceBlockers: ["selection runs everything"],
+    skippedShare: 0,
+    skippedShareBasis: "files",
+    universe: 0,
+    selected: [],
+    sampled: [],
+    skipped: [],
+    timings: {},
+    decidedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function decideStep(env, deps) {
+  const start2 = performance.now();
+  const now = deps.now ?? Date.now;
+  const warnings = [];
+  let inputs = null;
+  let event = {};
+  try {
+    event = readEvent(env);
+  } catch {
+  }
+  const full = (reason, d) => {
+    const decision2 = d ?? baseDecision(env, inputs, event);
+    decision2.reasons = [reason, ...decision2.reasons];
+    decision2.runAll = true;
+    decision2.mode = "shadow";
+    decision2.timings.stepMs = Math.round(performance.now() - start2);
+    return { decision: decision2, runAll: true, args: "", files: [], skip: false, warnings };
+  };
+  if (killSwitch(env)) return full("kill switch is on (run-all input or JIFFY_RUN_ALL)");
+  try {
+    inputs = parseStepInputs(env);
+  } catch (e) {
+    if (!(e instanceof InputError)) throw e;
+    return full(`invalid input: ${e.message}`);
+  }
+  let plan;
+  try {
+    event = readEvent(env);
+    plan = planFor(env, event, "");
+  } catch (e) {
+    return full(`cannot read the event payload: ${e.message}`);
+  }
+  if (plan.kind === "full") return full(plan.reason);
+  let cfg = null;
+  let target = null;
+  let token = null;
+  if (inputs.serviceUrl) {
+    const [owner = "", repo = ""] = (env.GITHUB_REPOSITORY ?? "").split("/");
+    target = { url: inputs.serviceUrl, owner, repo, timeoutMs: deps.serviceTimeoutMs ?? 5e3 };
+    try {
+      token = await oidcToken(env, target.timeoutMs);
+      cfg = await fetchConfig(target, token);
+    } catch (e) {
+      warnings.push(`service: ${e.message}; shadow only`);
+      cfg = null;
+    }
+    if (cfg?.runAll) return full(`service kill switch is on${cfg.reason ? `: ${cfg.reason}` : ""}`);
+  }
+  const decision = baseDecision(env, inputs, event);
+  decision.ledger = cfg?.ledger ?? null;
+  if (decision.ledger?.stale)
+    return full(`the ledger is stale (${decision.ledger.reasons.join("; ") || "behind"})`, decision);
+  const source = inputs.map ? { kind: "file", path: inputs.map, signature: inputs.mapSignature } : target && token ? { kind: "service", target, token } : { kind: "none" };
+  let w;
+  try {
+    w = await deps.work(
+      {
+        repo: inputs.workingDirectory,
+        baseCandidates: plan.baseCandidates,
+        ...plan.expectHead && { expectHead: plan.expectHead },
+        source,
+        keys: [...deps.keys ?? PINNED_MAP_KEYS],
+        keyOrigin: deps.keyOrigin === void 0 ? KEY_ORIGIN : deps.keyOrigin,
+        expect: { host: decision.host, tenantId: decision.ownerId, repoId: decision.repoId },
+        now: now(),
+        bounds: { maxCommits: inputs.maxMapCommits, maxAgeDays: inputs.maxMapAgeDays },
+        durations: inputs.durations,
+        history: inputs.history,
+        testPaths: inputs.testPaths,
+        always: inputs.always,
+        policyFiles: inputs.policyFiles,
+        sampleRate: inputs.sampleRate
+      },
+      inputs.timeoutSeconds * 1e3
+    );
+  } catch (e) {
+    return full(`error: ${e.message}`, decision);
+  }
+  Object.assign(decision, {
+    head: w.head,
+    base: w.base,
+    from: w.from,
+    map: w.map,
+    runAll: w.runAll,
+    reasons: w.reasons,
+    basis: w.basis,
+    universe: w.universe,
+    selected: w.selected,
+    sampled: w.sampled,
+    skipped: w.skipped,
+    skippedShare: w.skippedShare,
+    skippedShareBasis: w.skippedShareBasis,
+    timings: w.timings
+  });
+  const bad = [...w.selected.map((s) => s.test), ...w.sampled].find((t) => /^-|[\r\n\0]/.test(t));
+  if (bad) {
+    decision.runAll = true;
+    decision.reasons = [`a test path can't be passed to the runner: ${JSON.stringify(bad)}`];
+  }
+  const list3 = nativeArgs(inputs.runner, inputs.root, [...w.selected.map((s) => s.test), ...w.sampled]);
+  const unsafe = unsafeForRunner(inputs.runner, list3.files);
+  const blockers = [];
+  if (decision.runAll) blockers.push("selection runs everything");
+  if (!decision.map?.verified)
+    blockers.push(`the map is not verified${decision.map?.problem ? ` (${decision.map.problem})` : ""}`);
+  if (!decision.ledger) blockers.push("no ledger freshness from the service");
+  else if (decision.ledger.stale) blockers.push("the ledger is stale");
+  else if (!decision.ledger.complete) blockers.push("the ledger has blocking gaps");
+  if (!decision.runAll && unsafe) blockers.push(`a test path can't be passed to the runner: ${unsafe}`);
+  if (!decision.runAll && Buffer.byteLength(list3.args) > ARGS_BUDGET)
+    blockers.push(
+      `the test list needs ${Math.round(Buffer.byteLength(list3.args) / 1024)} KB, over the output budget`
+    );
+  if (!decision.runAll && !decision.skipped.length) blockers.push("nothing is skipped");
+  decision.enforceable = blockers.length === 0;
+  decision.enforceBlockers = blockers;
+  const why = [];
+  if (inputs.mode !== "enforce") why.push("shadow mode");
+  else {
+    if (!cfg?.selectionEnforce?.includes(decision.barKey))
+      why.push(
+        cfg ? `the service hasn't enabled enforcement for ${decision.barKey} (its shadow bar isn't met)` : "no service config"
+      );
+    why.push(...blockers.filter((b) => b !== "nothing is skipped" && b !== "selection runs everything"));
+  }
+  decision.mode = why.length ? "shadow" : "enforce";
+  decision.modeReason = inputs.mode === "enforce" && why.length ? why.join("; ") : null;
+  decision.timings.stepMs = Math.round(performance.now() - start2);
+  if (decision.mode !== "enforce" || decision.runAll)
+    return { decision, runAll: true, args: "", files: [], skip: false, warnings };
+  return {
+    decision,
+    runAll: false,
+    args: list3.args,
+    files: list3.files,
+    skip: list3.files.length === 0,
+    warnings
+  };
+}
+function writeStepOutputs(sink, r, decisionFile) {
+  sink.outputs([
+    ["mode", r.decision.mode],
+    ["reason", r.runAll ? r.decision.modeReason ?? r.decision.reasons[0] ?? "" : ""],
+    ["args", r.args],
+    ["files", r.files.join("\n")],
+    ["count", String(r.files.length)],
+    ["skip", String(r.skip)],
+    ["decision-file", decisionFile],
+    ["run-all", String(r.runAll)]
+  ]);
+}
+async function runSelectPhase(env, sink, deps) {
+  let r;
+  try {
+    r = await decideStep(env, deps);
+  } catch (e) {
+    const decision = baseDecision(env, null, {});
+    decision.reasons = [`internal error: ${e.message}`];
+    r = { decision, runAll: true, args: "", files: [], skip: false, warnings: [] };
+  }
+  let file = "";
+  try {
+    file = decisionPath(env);
+    mkdirSync4(dirname4(file), { recursive: true });
+    writeFileSync4(file, JSON.stringify(r.decision) + "\n");
+    sink.state?.("decision", file);
+  } catch (e) {
+    r.warnings.push(`could not write the decision file: ${e.message}`);
+    file = "";
+  }
+  writeStepOutputs(sink, r, file);
+  const d = r.decision;
+  if (r.runAll)
+    sink.log(
+      `Tensile (${d.mode}): running everything${d.runAll ? `: ${d.reasons[0] ?? ""}` : `; would run ${d.selected.length + d.sampled.length} of ${d.universe} test files`}`
+    );
+  else sink.log(`Tensile (enforce): ${r.files.length} test files (${d.sampled.length} sampled)`);
+  for (const w of r.warnings) sink.warning(w);
+  try {
+    sink.summary(renderDecision(d));
+  } catch (e) {
+    sink.warning(`could not write the job summary: ${e.message}`);
+  }
+  return r;
+}
+
+// src/upload.ts
+import { createHash as createHash7 } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync as readFileSync6 } from "node:fs";
+import { basename, join as join4 } from "node:path";
 var MAX_ARTIFACTS = 200;
 var TIMEOUT_MS = 3e4;
 var RETRIES = [1e3, 4e3];
@@ -9099,7 +10667,7 @@ function findEvidenceFiles(dir) {
     return { files, skipped };
   }
   if (names2.length === 1 && names2[0].startsWith(EVIDENCE_PREFIX) && names2[0].endsWith(".json")) {
-    const f = join2(dir, names2[0]);
+    const f = join4(dir, names2[0]);
     try {
       const fst = lstatSync(f);
       if (fst.isFile()) {
@@ -9112,7 +10680,7 @@ function findEvidenceFiles(dir) {
   }
   for (const name2 of names2) {
     if (!name2.startsWith(EVIDENCE_PREFIX)) continue;
-    const art = join2(dir, name2);
+    const art = join4(dir, name2);
     let st;
     try {
       st = lstatSync(art);
@@ -9141,7 +10709,7 @@ function findEvidenceFiles(dir) {
       );
       continue;
     }
-    const f = join2(art, want);
+    const f = join4(art, want);
     let fst;
     try {
       fst = lstatSync(f);
@@ -9187,7 +10755,7 @@ function isPlaceholder(u) {
   const f = u.evidence.findings;
   return Array.isArray(f) && f.length === 1 && f[0]?.type === "tool_problem" && f[0].subject === PLACEHOLDER_SUBJECT;
 }
-var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var sleep = (ms2) => new Promise((r) => setTimeout(r, ms2));
 async function post(url, token, body2, retries) {
   for (let i2 = 0; ; i2++) {
     try {
@@ -9257,7 +10825,7 @@ async function runUpload(env, opts = {}) {
     const name2 = basename(f);
     let text;
     try {
-      text = readFileSync5(f, "utf8");
+      text = readFileSync6(f, "utf8");
     } catch (e) {
       results.push({
         file: name2,
@@ -9267,7 +10835,7 @@ async function runUpload(env, opts = {}) {
       continue;
     }
     if (expected) {
-      const sha = createHash4("sha256").update(text).digest("hex");
+      const sha = createHash7("sha256").update(text).digest("hex");
       if (!expected.has(sha)) {
         results.push({
           file: name2,
@@ -9312,13 +10880,13 @@ async function runUpload(env, opts = {}) {
 }
 var cell = (s) => s.replace(/[|\r\n]/g, " ");
 function uploadSummary(o) {
-  const lines = ["## Jiffy evidence upload", "", `${o.reason}.`, ""];
+  const lines3 = ["## Jiffy evidence upload", "", `${o.reason}.`, ""];
   if (o.results.length) {
-    lines.push("| File | Result |", "| --- | --- |");
-    for (const r of o.results) lines.push(`| ${cell(r.file)} | ${r.ok ? "\u2713" : "\u2717"} ${cell(r.detail)} |`);
-    lines.push("");
+    lines3.push("| File | Result |", "| --- | --- |");
+    for (const r of o.results) lines3.push(`| ${cell(r.file)} | ${r.ok ? "\u2713" : "\u2717"} ${cell(r.detail)} |`);
+    lines3.push("");
   }
-  return lines.join("\n");
+  return lines3.join("\n");
 }
 async function mainUpload(env, sink) {
   let o;
@@ -9341,8 +10909,8 @@ async function mainUpload(env, sink) {
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 
 // src/decide.ts
-import { existsSync, readFileSync as readFileSync6 } from "node:fs";
-import { isAbsolute as isAbsolute3, resolve as resolve3 } from "node:path";
+import { existsSync as existsSync2, readFileSync as readFileSync7 } from "node:fs";
+import { isAbsolute as isAbsolute4, resolve as resolve5 } from "node:path";
 var isUrl = (s) => /^https?:\/\//i.test(s);
 async function readSource(src, cwd) {
   if (isUrl(src)) {
@@ -9350,9 +10918,9 @@ async function readSource(src, cwd) {
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     return Buffer.from(await res.arrayBuffer());
   }
-  const p = isAbsolute3(src) ? src : resolve3(cwd, src);
-  if (!existsSync(p)) throw new Error("file not found");
-  return readFileSync6(p);
+  const p = isAbsolute4(src) ? src : resolve5(cwd, src);
+  if (!existsSync2(p)) throw new Error("file not found");
+  return readFileSync7(p);
 }
 async function loadMap(from, { cwd, now, maxAgeDays }) {
   if (!from) return { map: null, info: null, problem: "no coverage map configured" };
@@ -9392,14 +10960,14 @@ async function loadMap(from, { cwd, now, maxAgeDays }) {
   }
   return { map, info: info2, problem: null };
 }
-var slashes = (p) => p.replace(/\\/g, "/");
+var slashes2 = (p) => p.replace(/\\/g, "/");
 function parseDurations(text, repo) {
   const json = JSON.parse(text);
   if (json && typeof json === "object" && Array.isArray(json.testResults)) {
     const report = json;
-    const root = slashes(repo).replace(/\/?$/, "/");
+    const root = slashes2(repo).replace(/\/?$/, "/");
     return durationsFromReport(
-      { testResults: report.testResults.map((t) => ({ ...t, name: slashes(t.name) })) },
+      { testResults: report.testResults.map((t) => ({ ...t, name: slashes2(t.name) })) },
       root
     );
   }
@@ -9408,7 +10976,7 @@ function parseDurations(text, repo) {
     for (const [k, v] of Object.entries(json)) {
       if (typeof v !== "number" || !Number.isFinite(v) || v < 0)
         throw new Error(`durations: ${k} is not a number of seconds`);
-      out2.set(slashes(k), v);
+      out2.set(slashes2(k), v);
     }
     return out2;
   }
@@ -9432,12 +11000,12 @@ function resolveBase(repo, candidates) {
 function missingAt(repo, rev, paths) {
   const ok = paths.filter((p) => !p.includes("\n"));
   if (!ok.length) return [];
-  const lines = git(
+  const lines3 = git(
     repo,
     ["cat-file", "--batch-check"],
     ok.map((p) => `${rev}:${p}`).join("\n") + "\n"
   ).split("\n");
-  return ok.filter((_, i2) => !/^[0-9a-f]+ blob \d+$/.test(lines[i2] ?? ""));
+  return ok.filter((_, i2) => !/^[0-9a-f]+ blob \d+$/.test(lines3[i2] ?? ""));
 }
 function checkHead(repo, head, expect) {
   const want = expect.toLowerCase();
@@ -9482,8 +11050,8 @@ async function decide(input) {
   let { map, problem } = loaded;
   let durations = null;
   if (input.durations) {
-    const p = isAbsolute3(input.durations) ? input.durations : resolve3(process.cwd(), input.durations);
-    durations = parseDurations(readFileSync6(p, "utf8"), repo);
+    const p = isAbsolute4(input.durations) ? input.durations : resolve5(process.cwd(), input.durations);
+    durations = parseDurations(readFileSync7(p, "utf8"), repo);
   }
   let added = [];
   if (map) {
@@ -9516,7 +11084,7 @@ async function decide(input) {
   const quarantinePresent = edited ? [] : [...quarantined].filter((t) => known.has(t) && !missing.has(t) && !changes.changedTests.has(t)).sort();
   const quarantineIgnored = edited ? `the change edits the quarantine list ${edited}` : null;
   const t5 = performance.now();
-  const ms = (a, b) => Math.round((b - a) * 10) / 10;
+  const ms2 = (a, b) => Math.round((b - a) * 10) / 10;
   return {
     base: base3,
     baseFrom: from,
@@ -9530,14 +11098,259 @@ async function decide(input) {
     sampled,
     quarantinePresent,
     quarantineIgnored,
-    timings: { mapMs: ms(t1, t2), diffMs: ms(t0, t1) + ms(t2, t3) + ms(t4, t5), selectMs: ms(t3, t4) }
+    timings: { mapMs: ms2(t1, t2), diffMs: ms2(t0, t1) + ms2(t2, t3) + ms2(t4, t5), selectMs: ms2(t3, t4) }
   };
+}
+
+// src/step/work.ts
+import { existsSync as existsSync3, readFileSync as readFileSync8, statSync as statSync2 } from "node:fs";
+import { isAbsolute as isAbsolute5, resolve as resolve6 } from "node:path";
+function skippedShareOf(universe, skipped, durations) {
+  if (!universe.length) return { share: 0, basis: "files" };
+  if (durations && universe.every((t) => durations.has(t))) {
+    const total = universe.reduce((s, t) => s + durations.get(t), 0);
+    if (total > 0) {
+      const sk = skipped.reduce((s, t) => s + (durations.get(t) ?? 0), 0);
+      return { share: Math.min(1, Math.max(0, sk / total)), basis: "durations" };
+    }
+  }
+  return { share: Math.min(1, skipped.length / universe.length), basis: "files" };
+}
+var isUrl2 = (s) => /^https:\/\//i.test(s);
+var MAX_MAP_BYTES2 = 64 * 1024 * 1024;
+async function readSource2(src, cwd) {
+  if (isUrl2(src)) {
+    const res = await fetch(src, { signal: AbortSignal.timeout(15e3) });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const len = Number(res.headers.get("content-length") ?? 0);
+    if (len > MAX_MAP_BYTES2) throw new Error(`${len} bytes, over ${MAX_MAP_BYTES2}`);
+    const b = Buffer.from(await res.arrayBuffer());
+    if (b.length > MAX_MAP_BYTES2) throw new Error(`${b.length} bytes, over ${MAX_MAP_BYTES2}`);
+    return b;
+  }
+  const p = isAbsolute5(src) ? src : resolve6(cwd, src);
+  if (!existsSync3(p)) return null;
+  const size = statSync2(p).size;
+  if (size > MAX_MAP_BYTES2) throw new Error(`${size} bytes, over ${MAX_MAP_BYTES2}`);
+  return readFileSync8(p);
+}
+function prefixMatcher(prefixes) {
+  if (!prefixes.length) return void 0;
+  const rx = prefixes.map(
+    (g) => new RegExp(
+      `^${g.replace(/[.+^${}()|[\]\\?]/g, "\\$&").replace(/\*\*/g, "\0").replace(/\*/g, "[^/]*").replace(/\0/g, ".*")}`
+    )
+  );
+  return (p) => rx.some((r) => r.test(p));
+}
+var MAX_SIGNATURE_BYTES = 16 * 1024;
+function parseSignedMap(text) {
+  if (!text.trim() || text.length > MAX_SIGNATURE_BYTES) return null;
+  try {
+    const v = JSON.parse(text);
+    if (!v || typeof v.claims !== "string" || typeof v.signature !== "string") return null;
+    return { claims: v.claims, signature: v.signature };
+  } catch {
+    return null;
+  }
+}
+async function verifyMapBytes(bytes, signed, metaCommit, input) {
+  const repoId = /^\d{1,19}$/.test(input.expect.repoId) ? Number(input.expect.repoId) : NaN;
+  const tenant = /^\d{1,19}$/.test(input.expect.tenantId) ? Number(input.expect.tenantId) : NaN;
+  if (!Number.isSafeInteger(repoId) || !Number.isSafeInteger(tenant) || !input.expect.host)
+    return { ok: false, reason: "the job's repo id, owner id or host is unknown" };
+  if (typeof metaCommit !== "string") return { ok: false, reason: "the map has no commit" };
+  const maxAgeDays = input.bounds.maxAgeDays ?? 14;
+  const expect = {
+    host: input.expect.host,
+    repoId,
+    tenant,
+    sha: metaCommit,
+    mapSha256: mapSha256(bytes),
+    ...maxAgeDays > 0 && { maxAgeMs: maxAgeDays * 864e5 },
+    now: new Date(input.now)
+  };
+  const v = verifyMap(toMapKeys(input.keys), signed, expect);
+  if (v.ok || !v.reason.startsWith("unknown signing key") || !input.keyOrigin) return v;
+  const published = await fetchPublishedKeys(input.keyOrigin);
+  return verifyMap(toMapKeys([...input.keys, ...published]), signed, expect);
+}
+function parseHistory(text) {
+  const v = JSON.parse(text);
+  if (!Array.isArray(v)) throw new Error("history must be a JSON array of {file, failedAt}");
+  return v.filter(
+    (x) => !!x && typeof x === "object" && typeof x.file === "string" && typeof x.failedAt === "string"
+  );
+}
+async function loadMap2(input, base3, cwd) {
+  const src = input.source;
+  if (src.kind === "none") return { map: null, use: null, fatal: null };
+  let bytes;
+  let signed = null;
+  let offered = false;
+  let label;
+  if (src.kind === "service") {
+    label = `${src.target.url} (map before ${base3.slice(0, 10)})`;
+    try {
+      const r = await fetchSignedMap(src.target, src.token, base3);
+      bytes = r.bytes;
+      signed = r.signed;
+      offered = r.offered;
+    } catch (e) {
+      if (e instanceof ServiceError && e.status === 404) bytes = null;
+      else throw e;
+    }
+  } else {
+    label = src.path;
+    bytes = await readSource2(src.path, cwd);
+    if (bytes) {
+      const s = await readSource2(src.signature, cwd).catch(() => null);
+      offered = !!s && s.length > 0;
+      signed = s ? parseSignedMap(s.toString("utf8")) : null;
+    }
+  }
+  if (!bytes) return { map: null, use: null, fatal: null };
+  const use = {
+    source: label,
+    commit: null,
+    verified: false,
+    keyId: null,
+    problem: null,
+    createdAt: null,
+    distance: null,
+    ageDays: null
+  };
+  let map;
+  try {
+    map = decodeMap(bytes);
+  } catch (e) {
+    return {
+      map: null,
+      use: { ...use, problem: `cannot decode: ${e.message}` },
+      fatal: "the coverage map cannot be decoded"
+    };
+  }
+  use.commit = typeof map.meta.commit === "string" ? map.meta.commit : null;
+  use.createdAt = typeof map.meta.createdAt === "string" ? map.meta.createdAt : null;
+  if (!map.tests.size)
+    return { map: null, use: { ...use, problem: "no tests" }, fatal: "the coverage map has no tests" };
+  if (!offered) return { map, use: { ...use, problem: "the map has no signature" }, fatal: null };
+  const v = signed ? await verifyMapBytes(bytes, signed, map.meta.commit, input) : { ok: false, reason: "the signature is malformed" };
+  if (v.ok) {
+    use.verified = true;
+    use.keyId = v.claims.kid;
+    use.createdAt = v.claims.createdAt;
+    return { map, use, fatal: null };
+  }
+  use.problem = v.reason;
+  return { map: null, use, fatal: `coverage map signature: ${v.reason}` };
+}
+async function work(input) {
+  const { repo } = input;
+  const t0 = performance.now();
+  const head = git(repo, ["rev-parse", "HEAD"]).trim();
+  if (input.expectHead) checkHead(repo, head, input.expectHead);
+  const { base: base3 } = resolveBase(repo, input.baseCandidates);
+  if (base3 === head)
+    throw new Error(`HEAD is the base (${head.slice(0, 10)}): there is no change to compare`);
+  const cwd = process.cwd();
+  const loaded = await loadMap2(input, base3, cwd);
+  const t1 = performance.now();
+  const durations = input.durations ? parseDurations(
+    readFileSync8(isAbsolute5(input.durations) ? input.durations : resolve6(cwd, input.durations), "utf8"),
+    repo
+  ) : null;
+  let history = [];
+  const notes = [];
+  if (input.history)
+    try {
+      history = parseHistory(
+        readFileSync8(isAbsolute5(input.history) ? input.history : resolve6(cwd, input.history), "utf8")
+      );
+    } catch (e) {
+      notes.push(`history unreadable (${e.message}); no history additions`);
+    }
+  const result = (r) => ({
+    head,
+    base: base3,
+    from: base3,
+    map: loaded.use,
+    runAll: true,
+    reasons: [],
+    basis: "none",
+    universe: 0,
+    selected: [],
+    sampled: [],
+    skipped: [],
+    skippedShare: 0,
+    skippedShareBasis: "files",
+    timings: {},
+    ...r
+  });
+  if (loaded.fatal) return result({ reasons: [loaded.fatal], timings: { mapMs: Math.round(t1 - t0) } });
+  const inScope = prefixMatcher(input.testPaths);
+  const alwaysMatch = prefixMatcher(input.always);
+  const plan = planSelection({
+    repo,
+    head,
+    base: base3,
+    map: loaded.map,
+    mapCreatedAt: loaded.use?.createdAt ?? null,
+    now: input.now,
+    bounds: input.bounds,
+    ...durations && { allTests: durations.keys() },
+    ...inScope && { inScope },
+    ...alwaysMatch && { always: alwaysMatch },
+    policyFiles: input.policyFiles,
+    history
+  });
+  const map = loaded.use ? { ...loaded.use, distance: plan.map?.distance ?? null, ageDays: plan.map?.ageDays ?? null } : null;
+  if (map && !plan.map && plan.runAll) map.problem ??= plan.reasons[0] ?? null;
+  const timings = { totalMs: 0, ...plan.timings, mapLoadMs: Math.round((t1 - t0) * 10) / 10 };
+  if (plan.runAll)
+    return result({
+      from: plan.from,
+      map,
+      reasons: [...plan.reasons, ...notes],
+      basis: plan.basis,
+      universe: plan.universe.length,
+      timings
+    });
+  const missing = new Set(missingAt(repo, head, [...plan.tests.keys(), ...plan.skipped]));
+  const selected = [...plan.tests].filter(([t]) => !missing.has(t)).map(([test, reasons]) => ({ test, reasons })).sort((a, b) => a.test < b.test ? -1 : a.test > b.test ? 1 : 0);
+  const present = plan.skipped.filter((t) => !missing.has(t));
+  const sampled = sampleOrder(present, head).slice(0, sampleSize(input.sampleRate, present.length)).sort();
+  const sampledSet = new Set(sampled);
+  const skipped = present.filter((t) => !sampledSet.has(t));
+  const share = skippedShareOf(plan.universe, skipped, durations);
+  timings.totalMs = Math.round((performance.now() - t0) * 10) / 10;
+  return result({
+    from: plan.from,
+    map,
+    runAll: false,
+    reasons: notes,
+    basis: plan.basis,
+    universe: plan.universe.length,
+    selected,
+    sampled,
+    skipped,
+    skippedShare: share.share,
+    skippedShareBasis: share.basis,
+    timings
+  });
 }
 
 // src/worker.ts
 function decideInWorker(input, timeoutMs) {
-  return new Promise((resolve4, reject) => {
-    const w = new Worker(new URL(import.meta.url), { workerData: { jiffyDecide: input } });
+  return inWorker({ jiffyDecide: input }, timeoutMs);
+}
+function stepInWorker(input, timeoutMs) {
+  return inWorker({ jiffyStep: input }, timeoutMs);
+}
+function inWorker(data2, timeoutMs) {
+  return new Promise((resolve7, reject) => {
+    const w = new Worker(new URL(import.meta.url), { workerData: data2 });
     const timer = setTimeout(() => {
       reject(new Error(`timed out after ${timeoutMs / 1e3} s`));
       void w.terminate();
@@ -9545,24 +11358,27 @@ function decideInWorker(input, timeoutMs) {
     const done = () => clearTimeout(timer);
     w.once("message", (m) => {
       done();
-      if (m.ok) resolve4(m.decision);
+      if (m.ok) resolve7(m.decision);
       else reject(new Error(m.error));
     });
     w.once("error", (e) => {
       done();
       reject(e);
     });
-    w.once("exit", (code2) => {
+    w.once("exit", (code3) => {
       done();
-      reject(new Error(`decision worker exited with code ${code2}`));
+      reject(new Error(`decision worker exited with code ${code3}`));
     });
   });
 }
-var job = !isMainThread && workerData?.jiffyDecide;
-if (job) {
+var data = isMainThread ? null : workerData;
+if (data?.jiffyDecide || data?.jiffyStep) {
   let reply;
   try {
-    reply = { ok: true, decision: await decide(job) };
+    reply = {
+      ok: true,
+      decision: data.jiffyDecide ? await decide(data.jiffyDecide) : await work(data.jiffyStep)
+    };
   } catch (e) {
     reply = { ok: false, error: e.message };
   }
@@ -9571,22 +11387,35 @@ if (job) {
 
 // src/index.ts
 var EVIDENCE_MODULE = import.meta.url.endsWith(".ts") ? "./evidence.ts" : "./evidence.js";
+async function legacy(env, sink, evidence) {
+  if (evidence === "upload") process.exitCode = await mainUpload(env, sink);
+  else if (evidence === "start") process.exitCode = mainStart(env, sink);
+  else if (evidence === "true") {
+    const mod = await import(EVIDENCE_MODULE);
+    await mod.main(env, sink);
+  } else if (evidence && evidence !== "false") {
+    sink.warning(
+      `input evidence must be start, true, false or upload, got ${JSON.stringify(evidence)}; doing nothing`
+    );
+    process.exitCode = 1;
+  } else await runGate(env, sink, { decide: decideInWorker });
+}
 if (isMainThread2) {
   const env = process.env;
   const sink = actionsSink(env);
   const evidence = getInput(env, "evidence").toLowerCase();
+  const phase = getInput(env, "phase").toLowerCase();
   try {
-    if (evidence === "upload") process.exitCode = await mainUpload(env, sink);
-    else if (evidence === "start") process.exitCode = mainStart(env, sink);
-    else if (evidence === "true") {
-      const mod = await import(EVIDENCE_MODULE);
-      await mod.main(env, sink);
-    } else if (evidence && evidence !== "false") {
-      sink.warning(
-        `input evidence must be start, true, false or upload, got ${JSON.stringify(evidence)}; doing nothing`
-      );
-      process.exitCode = 1;
-    } else await runGate(env, sink, { decide: decideInWorker });
+    if (env.STATE_isPost === "true") runPost(env, sink);
+    else {
+      sink.state?.("isPost", "true");
+      if (phase === "select") await runSelectPhase(env, sink, { work: stepInWorker });
+      else if (phase === "outcome") runOutcomePhase(env, sink, decisionPath(env));
+      else if (phase) {
+        sink.warning(`input phase must be select or outcome, got ${JSON.stringify(phase)}; doing nothing`);
+        process.exitCode = 1;
+      } else await legacy(env, sink, evidence);
+    }
   } catch (e) {
     process.stdout.write(`::error title=Jiffy::${escapeCommand(e.message)}
 `);
