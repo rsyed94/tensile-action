@@ -48143,11 +48143,11 @@ ${lanes.join("\n")}
             if (i2 < rootLength) {
               return void 0;
             }
-            const sep5 = directory.lastIndexOf(directorySeparator, i2 - 1);
-            if (sep5 === -1) {
+            const sep6 = directory.lastIndexOf(directorySeparator, i2 - 1);
+            if (sep6 === -1) {
               return void 0;
             }
-            return directory.substr(0, Math.max(sep5, rootLength));
+            return directory.substr(0, Math.max(sep6, rootLength));
           }
         }
       }
@@ -124332,7 +124332,7 @@ ${lanes.join("\n")}
           }
         }
         function createImportCallExpressionAMD(arg, containsLexicalThis) {
-          const resolve2 = factory2.createUniqueName("resolve");
+          const resolve3 = factory2.createUniqueName("resolve");
           const reject = factory2.createUniqueName("reject");
           const parameters = [
             factory2.createParameterDeclaration(
@@ -124341,7 +124341,7 @@ ${lanes.join("\n")}
               /*dotDotDotToken*/
               void 0,
               /*name*/
-              resolve2
+              resolve3
             ),
             factory2.createParameterDeclaration(
               /*modifiers*/
@@ -124358,7 +124358,7 @@ ${lanes.join("\n")}
                 factory2.createIdentifier("require"),
                 /*typeArguments*/
                 void 0,
-                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve2, reject]
+                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve3, reject]
               )
             )
           ]);
@@ -211289,8 +211289,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         installPackage(options) {
           this.packageInstallId++;
           const request = { kind: "installPackage", ...options, id: this.packageInstallId };
-          const promise = new Promise((resolve2, reject) => {
-            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve2, reject });
+          const promise = new Promise((resolve3, reject) => {
+            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve3, reject });
           });
           this.installer.send(request);
           return promise;
@@ -215535,10 +215535,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start: start2, key, sep: sep5, value } = collItem;
+        const { start: start2, key, sep: sep6, value } = collItem;
         const keyProps = resolveProps.resolveProps(start2, {
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -215552,7 +215552,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep5) {
+          if (!keyProps.anchor && !keyProps.tag && !sep6) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -215576,7 +215576,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep6 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -215592,7 +215592,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep5, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep6, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -215683,7 +215683,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep5 = "";
+        let sep6 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -215697,13 +215697,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep5 + cb;
-              sep5 = "";
+                comment += sep6 + cb;
+              sep6 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep5 += source;
+                sep6 += source;
               hasSpace = true;
               break;
             default:
@@ -215746,18 +215746,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start: start2, key, sep: sep5, value } = collItem;
+        const { start: start2, key, sep: sep6, value } = collItem;
         const props = resolveProps.resolveProps(start2, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep5 && !value) {
+          if (!props.anchor && !props.tag && !sep6 && !value) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -215811,8 +215811,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap2 && !sep5 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep5, null, props, onError);
+        if (!isMap2 && !sep6 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep6, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -215824,7 +215824,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep6 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -215835,8 +215835,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap2 && !props.found && ctx.options.strict) {
-              if (sep5)
-                for (const st of sep5) {
+              if (sep6)
+                for (const st of sep6) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -215853,7 +215853,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep5, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep6, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -216033,7 +216033,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value = "";
-      let sep5 = "";
+      let sep6 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value += lines[i2][0].slice(trimIndent) + "\n";
@@ -216050,24 +216050,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep5 === " ")
-            sep5 = "\n";
-          else if (!prevMoreIndented && sep5 === "\n")
-            sep5 = "\n\n";
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          if (sep6 === " ")
+            sep6 = "\n";
+          else if (!prevMoreIndented && sep6 === "\n")
+            sep6 = "\n\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep5 === "\n")
+          if (sep6 === "\n")
             value += "\n";
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          value += sep5 + content;
-          sep5 = " ";
+          value += sep6 + content;
+          sep6 = " ";
           prevMoreIndented = false;
         }
       }
@@ -216250,25 +216250,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep5 = " ";
+      let sep6 = " ";
       let pos = line.lastIndex;
       while (match = line.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep5 === "\n")
-            res += sep5;
+          if (sep6 === "\n")
+            res += sep6;
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          res += sep5 + lm;
-          sep5 = " ";
+          res += sep6 + lm;
+          sep6 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep5 + (match?.[1] ?? "");
+      return res + sep6 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -217078,14 +217078,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start: start2, key, sep: sep5, value }) {
+    function stringifyItem({ start: start2, key, sep: sep6, value }) {
       let res = "";
       for (const st of start2)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep5)
-        for (const st of sep5)
+      if (sep6)
+        for (const st of sep6)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -218252,18 +218252,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start2 = getFirstKeyStartProps(prev);
-          let sep5;
+          let sep6;
           if (scalar.end) {
-            sep5 = scalar.end;
-            sep5.push(this.sourceToken);
+            sep6 = scalar.end;
+            sep6.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep5 = [this.sourceToken];
+            sep6 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start: start2, key: scalar, sep: sep5 }]
+            items: [{ start: start2, key: scalar, sep: sep6 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -218416,15 +218416,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start3 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep5 = it.sep;
-                  sep5.push(this.sourceToken);
+                  const sep6 = it.sep;
+                  sep6.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start3, key, sep: sep5 }]
+                    items: [{ start: start3, key, sep: sep6 }]
                   });
                 } else if (start2.length > 0) {
                   it.sep = it.sep.concat(start2, this.sourceToken);
@@ -218618,13 +218618,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start2 = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep5 = fc.end.splice(1, fc.end.length);
-            sep5.push(this.sourceToken);
+            const sep6 = fc.end.splice(1, fc.end.length);
+            sep6.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start: start2, key: fc, sep: sep5 }]
+              items: [{ start: start2, key: fc, sep: sep6 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -218909,11 +218909,11 @@ import {
   existsSync as existsSync10,
   lstatSync as lstatSync4,
   mkdirSync as mkdirSync6,
-  realpathSync as realpathSync5,
+  realpathSync as realpathSync6,
   writeFileSync as writeFileSync6
 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { dirname as dirname10, join as join14, sep as sep4 } from "node:path";
+import { dirname as dirname11, join as join14, sep as sep5 } from "node:path";
 
 // ../evidence/src/types.ts
 var DEFAULT_STATUS_POLICY = { weakTestThreshold: 0.5, untestedLines: "block" };
@@ -219375,6 +219375,13 @@ function git(repo, args2, input) {
 function mergeBase(repo, a, b) {
   return git(repo, ["merge-base", a, b]).trim();
 }
+
+// ../engine/src/refs/resolve.ts
+import { builtinModules } from "node:module";
+var BUILTINS = new Set(builtinModules);
+
+// ../engine/src/globs.ts
+var MAX_BYTES = 2 * 1024 * 1024;
 
 // ../engine/src/spans/python.ts
 import { createRequire } from "node:module";
@@ -221008,13 +221015,13 @@ async function Module2(moduleArg = {}) {
       }
       readAsync = /* @__PURE__ */ __name(async (url) => {
         if (isFileURI(url)) {
-          return new Promise((resolve2, reject) => {
+          return new Promise((resolve3, reject) => {
             var xhr = new XMLHttpRequest();
             xhr.open("GET", url, true);
             xhr.responseType = "arraybuffer";
             xhr.onload = () => {
               if (xhr.status == 200 || xhr.status == 0 && xhr.response) {
-                resolve2(xhr.response);
+                resolve3(xhr.response);
                 return;
               }
               reject(xhr.status);
@@ -221210,9 +221217,9 @@ async function Module2(moduleArg = {}) {
     __name(receiveInstantiationResult, "receiveInstantiationResult");
     var info2 = getWasmImports();
     if (Module["instantiateWasm"]) {
-      return new Promise((resolve2, reject) => {
+      return new Promise((resolve3, reject) => {
         Module["instantiateWasm"](info2, (mod, inst) => {
-          resolve2(receiveInstance(mod, inst));
+          resolve3(receiveInstance(mod, inst));
         });
       });
     }
@@ -222545,8 +222552,8 @@ async function Module2(moduleArg = {}) {
   if (runtimeInitialized) {
     moduleRtn = Module;
   } else {
-    moduleRtn = new Promise((resolve2, reject) => {
-      readyPromiseResolve = resolve2;
+    moduleRtn = new Promise((resolve3, reject) => {
+      readyPromiseResolve = resolve3;
       readyPromiseReject = reject;
     });
   }
@@ -223439,10 +223446,6 @@ function initPython() {
 var PURE_CALLS = new Set(
   "TypeVar ParamSpec TypeVarTuple NewType namedtuple NamedTuple TypedDict cast frozenset set dict list tuple str int float bool bytes object range sorted len min max sum any all zip enumerate isinstance Path pathlib.Path PurePath field dataclasses.field Field ConfigDict SettingsConfigDict TypeAdapter PrivateAttr SkipValidation pydantic.Field pydantic.ConfigDict pydantic.TypeAdapter ContextVar contextvars.ContextVar Lock RLock Event threading.Lock threading.RLock threading.Event threading.local Decimal decimal.Decimal timedelta timezone partial functools.partial re.compile compile Enum IntEnum StrEnum enum.Enum Literal Annotated Optional Union ClassVar Final getLogger logging.getLogger os.getenv os.environ.get os.getcwd os.cpu_count json.loads json.dumps defaultdict OrderedDict Counter deque collections.namedtuple collections.defaultdict collections.OrderedDict collections.Counter collections.deque uuid.uuid4 uuid.UUID time.time time.monotonic weakref.WeakSet weakref.WeakValueDictionary weakref.WeakKeyDictionary weakref.ref ipaddress.ip_network ipaddress.ip_address ipaddress.IPv4Network ipaddress.IPv6Network operator.itemgetter operator.attrgetter operator.methodcaller itemgetter attrgetter methodcaller".split(" ")
 );
-
-// ../engine/src/refs/resolve.ts
-import { builtinModules } from "node:module";
-var BUILTINS = new Set(builtinModules);
 
 // ../../node_modules/.pnpm/oxc-parser@0.157.0/node_modules/oxc-parser/src-js/index.js
 import { createRequire as createRequire3 } from "node:module";
@@ -224454,8 +224457,31 @@ var MAX_MAP_BYTES = 256 * 1024 * 1024;
 // ../engine/src/coverage/reads.ts
 var READS_MARK = fnId("", "jiffy:reads");
 
+// ../engine/src/coverage/parts.ts
+var PART_FORMAT = 2;
+var FORMAT_MARK = fnId("", `jiffy:v${PART_FORMAT}`);
+var CHILDREN_MARK = fnId("", "jiffy:children");
+
 // ../engine/src/specs.ts
 var MAX_SPEC_SCAN_BYTES = 2 * 1024 * 1024;
+
+// ../engine/src/plan.ts
+var SPAWN = new RegExp(
+  [
+    /['"`](?:node:)?(?:child_process|worker_threads|cluster)['"`]/,
+    /['"`](?:execa|zx|cross-spawn|tinyexec|nano-spawn|@npmcli\/promise-spawn|tinypool|piscina|workerpool|threads|shelljs|node-pty|@lydell\/node-pty|concurrently)(?:\/[^'"`]*)?['"`]/,
+    /\b(?:spawn|spawnSync|fork|execa|execaSync|execaNode|execaCommand|execaCommandSync)\s*\(/,
+    /\$\s*`/,
+    /process\.execPath|\bnew\s+(?:Worker|Tinypool|Piscina)\s*\(|\bBun\.spawn/,
+    /^[ \t]*(?:import|from)\s+(?:subprocess|multiprocessing|concurrent\.futures|pty|pexpect)\b/,
+    /\bsubprocess\.|\bmultiprocessing\b|\bProcessPoolExecutor\b|\bsys\.executable\b/,
+    /\bcreate_subprocess_(?:exec|shell)\b|\brunpytest_subprocess\b|\bspawn_pytest\b|\bpytester\b|\btestdir\b/,
+    /^[ \t]*(?:import|from)\s+(?:sh|plumbum)\b/,
+    /^[ \t]*from\s+os\s+import\b[^\n]*\b(?:system|popen|exec\w*|spawn\w*|fork\w*|posix_spawn\w*)\b/,
+    /\bos\.(?:system|popen|fork|forkpty|exec\w*|spawn\w*|posix_spawn\w*)\s*\(/
+  ].map((r) => r.source).join("|"),
+  "m"
+);
 
 // ../engine/src/index.ts
 try {
@@ -224744,14 +224770,14 @@ function killAll() {
   }
 }
 function run2(cmd, args2, opts) {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     const t0 = Date.now();
     const l = launcher;
     let spec;
     try {
       spec = l ? l.wrap(cmd, args2, { cwd: opts.cwd, env: opts.env ?? {}, inherited: process.env }) : { cmd, args: args2, env: { ...process.env, ...opts.env } };
     } catch (e) {
-      resolve2({
+      resolve3({
         code: -1,
         signal: null,
         timedOut: false,
@@ -224795,7 +224821,7 @@ function run2(cmd, args2, opts) {
       clearTimeout(grace);
       killGroup();
       if (p.pid !== void 0) active.delete(p.pid);
-      resolve2({ code, signal, timedOut, out: buf.slice(-KEEP), ms: Date.now() - t0 });
+      resolve3({ code, signal, timedOut, out: buf.slice(-KEEP), ms: Date.now() - t0 });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -226218,7 +226244,7 @@ function hintFor(m, executed) {
 import { execFileSync as execFileSync5 } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
 import { existsSync as existsSync8, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync3, readFileSync as readFileSync13, rmSync as rmSync6, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename as basename2, dirname as dirname7, join as join11 } from "node:path";
+import { basename as basename2, dirname as dirname8, join as join11 } from "node:path";
 
 // ../mutate/src/cache.ts
 import { execFileSync as execFileSync4 } from "node:child_process";
@@ -226240,7 +226266,7 @@ import { dirname as dirname6, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var CACHE_VERSION = 1;
 var KEEP2 = 20;
-var MAX_BYTES = 64 << 20;
+var MAX_BYTES2 = 64 << 20;
 var CI_VARS = [
   "CI",
   "GITHUB_ACTIONS",
@@ -226382,7 +226408,7 @@ function readBaseline(root, key) {
   if (!dir) return null;
   const file = join9(dir, `${key}.json`);
   try {
-    if (!existsSync6(file) || statSync2(file).size > MAX_BYTES) return null;
+    if (!existsSync6(file) || statSync2(file).size > MAX_BYTES2) return null;
     const j = JSON.parse(readFileSync10(file, "utf8"));
     if (!isObj(j) || j.v !== CACHE_VERSION || j.key !== key) throw new Error("mismatch");
     const b = asBaseline(j.baseline);
@@ -226412,8 +226438,16 @@ function writeBaseline(root, key, b) {
 
 // ../mutate/src/coverage.ts
 var import_typescript10 = __toESM(require_typescript(), 1);
-import { existsSync as existsSync7, mkdirSync as mkdirSync3, readdirSync as readdirSync3, readFileSync as readFileSync11, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { basename, isAbsolute as isAbsolute2, join as join10, relative as relative7 } from "node:path";
+import {
+  existsSync as existsSync7,
+  mkdirSync as mkdirSync3,
+  readdirSync as readdirSync3,
+  readFileSync as readFileSync11,
+  realpathSync as realpathSync4,
+  statSync as statSync3,
+  writeFileSync as writeFileSync3
+} from "node:fs";
+import { basename, dirname as dirname7, isAbsolute as isAbsolute2, join as join10, relative as relative7, resolve as resolve2, sep as sep3 } from "node:path";
 import { fileURLToPath as fileURLToPath3, pathToFileURL } from "node:url";
 var HOOK = fileURLToPath3(new URL("./adapters/coverage-hook.mjs", import.meta.url));
 function coverageEnv(dir, nodeOptions = process.env.NODE_OPTIONS) {
@@ -226423,6 +226457,42 @@ function coverageEnv(dir, nodeOptions = process.env.NODE_OPTIONS) {
     NODE_V8_COVERAGE: dir,
     NODE_OPTIONS: [nodeOptions, `--import=${hook.href}`].filter(Boolean).join(" ")
   };
+}
+function preloadFiles(nodeOptions) {
+  const words = (nodeOptions ?? "").split(/\s+/).filter(Boolean);
+  const todo = [];
+  for (let i2 = 0; i2 < words.length; i2++) {
+    const m = /^(--import|--require|-r|--loader|--experimental-loader)(?:=(.*))?$/.exec(words[i2]);
+    if (!m) continue;
+    let v = m[2] ?? words[++i2] ?? "";
+    if (v.startsWith("file:")) {
+      try {
+        v = fileURLToPath3(v.split("?")[0]);
+      } catch {
+        continue;
+      }
+    }
+    if (isAbsolute2(v) && resolve2(v) !== HOOK) todo.push(resolve2(v));
+  }
+  const out2 = /* @__PURE__ */ new Set();
+  while (todo.length && out2.size < 64) {
+    const f = todo.pop();
+    if (out2.has(f)) continue;
+    let text;
+    try {
+      text = readFileSync11(f, "utf8");
+    } catch {
+      continue;
+    }
+    out2.add(f);
+    try {
+      out2.add(realpathSync4(f));
+    } catch {
+    }
+    for (const m of text.matchAll(/(?:from|import|require\()\s*['"](\.\.?\/[^'"]+)['"]/g))
+      todo.push(resolve2(dirname7(f), m[1]));
+  }
+  return [...out2];
 }
 function prepareCoverage(dir, ctx) {
   mkdirSync3(dir, { recursive: true });
@@ -226438,13 +226508,13 @@ function smcMapping(url, e) {
     base: typeof e.url === "string" ? e.url : url
   };
 }
-var MAX_BYTES2 = 256 << 20;
+var MAX_BYTES3 = 256 << 20;
 var MAX_TOTAL = 2 * 1024 ** 3;
 var NODE_MODULES = /[\\/]node_modules[\\/]/;
 var Bad = class extends Error {
 };
 function readJson(path) {
-  if (statSync3(path).size > MAX_BYTES2) throw new Bad("coverage file too large");
+  if (statSync3(path).size > MAX_BYTES3) throw new Bad("coverage file too large");
   return JSON.parse(readFileSync11(path, "utf8"));
 }
 var isObj2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
@@ -226498,6 +226568,7 @@ function readCoverage(dir, tests, ctx) {
     const p = filePath(url);
     return p && EVAL_NAME.test(basename(p)) && !ctx.listed.has(relative7(ctx.ws, p)) ? null : p;
   };
+  const envPreloads = new Set(ctx.envPreloads ?? preloadFiles(process.env.NODE_OPTIONS));
   const procs = [];
   const marks = [];
   const exits = /* @__PURE__ */ new Set();
@@ -226692,6 +226763,8 @@ function readCoverage(dir, tests, ctx) {
       if (!path || NODE_MODULES.test(path) || path === HOOK) continue;
       const rel = relative7(ctx.ws, path);
       const inside2 = rel !== "" && !rel.startsWith("..") && !isAbsolute2(rel);
+      if (!inside2 && envPreloads.has(path) && ![...ctx.want].some((w) => path.endsWith(sep3 + w.split("/").join(sep3))) && p.smc[s.url] === void 0 && !captured.some((c) => c.pid === p.pid && (c.url === s.url || c.url === path)))
+        continue;
       try {
         checkRanges(s);
         const length = scriptLength(s);
@@ -227588,7 +227661,7 @@ function setupFiles(root, base, files, graph) {
   const KEY = /(setupFiles|globalSetup|setupFilesAfterEach|setupFilesAfterEnv)\s*:\s*(\[[^\]]*\]|['"`][^'"`]*['"`])/g;
   for (const cfg of files) {
     if (!RUNNER_CONFIG.test(cfg)) continue;
-    const dir = dirname7(cfg) === "." ? "" : dirname7(cfg);
+    const dir = dirname8(cfg) === "." ? "" : dirname8(cfg);
     for (const text of [
       readAt(root, base, cfg),
       existsSync8(join11(root, cfg)) ? readFileSync13(join11(root, cfg), "utf8") : null
@@ -227618,7 +227691,7 @@ function setupFiles(root, base, files, graph) {
   }
   for (const pkg of files) {
     if (!pkg.endsWith("package.json") || pkg.includes("node_modules/")) continue;
-    const dir = dirname7(pkg) === "." ? "" : dirname7(pkg);
+    const dir = dirname8(pkg) === "." ? "" : dirname8(pkg);
     for (const text of [
       readAt(root, base, pkg),
       existsSync8(join11(root, pkg)) ? readFileSync13(join11(root, pkg), "utf8") : null
@@ -227840,7 +227913,7 @@ async function verify(opts) {
   for (const t of changedEntries) runnable.add(t);
   if (fullSuite) for (const t of graph.tests) runnable.add(t);
   const pkgOf = (f) => {
-    for (let d = dirname7(f); d !== "." && d !== ""; d = dirname7(d))
+    for (let d = dirname8(f); d !== "." && d !== ""; d = dirname8(d))
       if (existsSync8(join11(root, d, "package.json"))) return d;
     return "";
   };
@@ -228144,16 +228217,11 @@ async function verify(opts) {
         const covRun = async (wi, ws, files, o) => {
           const e = env(wi, ws);
           const dir = mkdtempSync3(join11(ws, ".jiffy-cov-"));
-          const ctx = { ws, want, listed };
+          const inherited = e.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
+          const ctx = { ws, want, listed, envPreloads: preloadFiles(inherited) };
           prepareCoverage(dir, ctx);
           try {
-            const r = await runB(
-              ws,
-              files,
-              runnerOf,
-              { ...e, ...coverageEnv(dir, e.NODE_OPTIONS ?? process.env.NODE_OPTIONS) },
-              o
-            );
+            const r = await runB(ws, files, runnerOf, { ...e, ...coverageEnv(dir, inherited) }, o);
             for (const [t, c] of readCoverage(dir, files, ctx))
               coverage.set(
                 t,
@@ -228769,7 +228837,7 @@ function envFiles(repo) {
     ]).split("\0").filter(Boolean);
   } catch {
   }
-  const dirs = /* @__PURE__ */ new Set([".", ...listed.map((f) => dirname7(f))]);
+  const dirs = /* @__PURE__ */ new Set([".", ...listed.map((f) => dirname8(f))]);
   for (const d of dirs) listed.push(join11(d, ".env.test.local"));
   for (const f of new Set(listed.map((f2) => f2.replace(/^\.\//, ""))))
     try {
@@ -228949,11 +229017,11 @@ import {
   mkdtempSync as mkdtempSync4,
   readdirSync as readdirSync4,
   readFileSync as readFileSync15,
-  realpathSync as realpathSync4,
+  realpathSync as realpathSync5,
   rmSync as rmSync7
 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative8, sep as sep3 } from "node:path";
+import { dirname as dirname9, isAbsolute as isAbsolute3, join as join12, relative as relative8, sep as sep4 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 var NEVER_ENV = /^(ACTIONS_|INPUT_)|^(GITHUB_TOKEN|GH_TOKEN|GITHUB_OUTPUT|GITHUB_ENV|GITHUB_PATH|GITHUB_STATE|GITHUB_STEP_SUMMARY|JIFFY_RUN_AS)$/;
 var BASE_ENV = [
@@ -229040,10 +229108,10 @@ function lookupUser(name2, run3 = exec) {
     throw new Error(`${name2} belongs to ${groups.length || "no"} groups; it must have only its own`);
   return { name: name2, uid, home };
 }
-function workspaceRoot2(cwd, tmp = realpathSync4(tmpdir3())) {
-  const real = realpathSync4(cwd);
+function workspaceRoot2(cwd, tmp = realpathSync5(tmpdir3())) {
+  const real = realpathSync5(cwd);
   const rel = relative8(tmp, real);
-  const top = rel.split(sep3)[0] ?? "";
+  const top = rel.split(sep4)[0] ?? "";
   if (!rel || rel.startsWith("..") || isAbsolute3(rel) || !top.startsWith("jiffy-"))
     throw new Error(`tests run only in Jiffy's workspace copies, not in ${real}`);
   return join12(tmp, top);
@@ -229061,9 +229129,14 @@ function openDirs(root, uid = process.getuid?.() ?? -1) {
 var running = (user) => {
   const pgrep = which("pgrep");
   if (!pgrep) return null;
-  const r = spawnSync2(pgrep, ["-u", user], { stdio: "ignore", timeout: 1e4, env: { PATH: SYSTEM_PATH } });
-  return r.status === 0 ? true : r.status === 1 ? false : null;
+  const ask = (flag) => spawnSync2(pgrep, [flag, user], { stdio: "ignore", timeout: 1e4, env: { PATH: SYSTEM_PATH } }).status;
+  const a = ask("-u");
+  const b = ask("-U");
+  if (a === 0 || b === 0) return true;
+  return a === 1 && b === 1 ? false : null;
 };
+var KILL_WAIT_MS = 5e3;
+var sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 function jobNode(path, fallback = process.execPath) {
   for (const d of (path ?? "").split(":"))
     if (isAbsolute3(d) && existsSync9(join12(d, "node"))) return join12(d, "node");
@@ -229120,10 +229193,18 @@ function userLauncher(user, opts = {}) {
         );
     },
     killAll() {
+      const budget = opts.killWaitMs ?? KILL_WAIT_MS;
+      const sleep = opts.sleep ?? sleepSync;
       let left = true;
-      for (let i2 = 0; i2 < 3 && left !== false; i2++) {
+      let waited = 0;
+      const t0 = Date.now();
+      for (let pause = 25; ; pause = Math.min(pause * 2, 500)) {
         asUser([tool("kill"), "-9", "--", "-1"], 1e4);
         left = isRunning(user.name);
+        if (left === false || waited >= budget || Date.now() - t0 >= budget) break;
+        const ms = Math.min(pause, budget - waited);
+        sleep(ms);
+        waited += ms;
       }
       for (const root of roots) asUser([tool("chmod"), "-R", "a=rwX", "--", root], 12e4);
       return left === false;
@@ -229142,7 +229223,7 @@ function runnerRoot(procRoot = "/proc", start2 = process.ppid) {
     const name2 = /^Name:\s*(.*)$/m.exec(status)?.[1]?.trim();
     if (name2 === "Runner.Worker") {
       try {
-        return dirname8(dirname8(realpathSync4(join12(procRoot, String(pid), "exe"))));
+        return dirname9(dirname9(realpathSync5(join12(procRoot, String(pid), "exe"))));
       } catch {
         return null;
       }
@@ -229154,7 +229235,7 @@ function runnerRoot(procRoot = "/proc", start2 = process.ppid) {
 function judgePaths(bundle = fileURLToPath4(import.meta.url)) {
   const out2 = /* @__PURE__ */ new Set();
   const withParents = (p) => {
-    for (let d = p; d !== dirname8(d); d = dirname8(d)) out2.add(d);
+    for (let d = p; d !== dirname9(d); d = dirname9(d)) out2.add(d);
   };
   for (const p of [
     process.execPath,
@@ -229167,7 +229248,7 @@ function judgePaths(bundle = fileURLToPath4(import.meta.url)) {
   ])
     if (p)
       try {
-        withParents(realpathSync4(p));
+        withParents(realpathSync5(p));
       } catch {
       }
   return [...out2];
@@ -229205,7 +229286,7 @@ function checkProblems(c, user) {
   return p;
 }
 async function probeIsolation(runFn, evidenceFile, evidenceDir, opts = {}) {
-  const dir = mkdtempSync4(join12(opts.tmp ?? realpathSync4(tmpdir3()), "jiffy-isolation-check-"));
+  const dir = mkdtempSync4(join12(opts.tmp ?? realpathSync5(tmpdir3()), "jiffy-isolation-check-"));
   try {
     const args2 = [
       "-e",
@@ -229793,7 +229874,7 @@ import { execFileSync as execFileSync6 } from "node:child_process";
 import { createHash as createHash6 } from "node:crypto";
 import { mkdirSync as mkdirSync5, readFileSync as readFileSync16, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
-import { dirname as dirname9, join as join13 } from "node:path";
+import { dirname as dirname10, join as join13 } from "node:path";
 var POLICY_FILE = "jiffy.yml";
 var StepProblem = class extends Error {
   problem;
@@ -229900,7 +229981,7 @@ function writePlaceholder(env, event, file, known = {}) {
     runId: Math.max(0, Number(env.GITHUB_RUN_ID) || 0),
     attempt: Math.max(1, Number(env.GITHUB_RUN_ATTEMPT) || 1)
   };
-  mkdirSync5(dirname9(file), { recursive: true });
+  mkdirSync5(dirname10(file), { recursive: true });
   const text = JSON.stringify(body2) + "\n";
   writeFileSync5(file, text);
   return sha256(text);
@@ -230274,7 +230355,7 @@ async function runEvidence(env, sink, deps) {
     for (const p of parsed.problems) extra.push(problemFinding("config", POLICY_FILE, p));
     let canRun = true;
     try {
-      isolation = deps.isolate ? await deps.isolate({ file, dir: dirname10(file) }) : "none";
+      isolation = deps.isolate ? await deps.isolate({ file, dir: dirname11(file) }) : "none";
       if (isolation === "user" && env.JIFFY_UPLOAD_UNCHECKED === "true") {
         isolation = "none";
         sink.log(
@@ -230455,9 +230536,9 @@ async function isolateTests(env, ev, sink, platform2 = process.platform) {
   if (!name2) throw new Error("the isolation step named no test user");
   if (platform2 !== "linux") throw new Error("a separate test user needs a Linux runner");
   const uid = process.getuid?.();
-  const workspace = env.GITHUB_WORKSPACE ? realpathSync5(env.GITHUB_WORKSPACE) : null;
-  const dir = realpathSync5(ev.dir);
-  if (workspace && (dir === workspace || dir.startsWith(workspace + sep4)))
+  const workspace = env.GITHUB_WORKSPACE ? realpathSync6(env.GITHUB_WORKSPACE) : null;
+  const dir = realpathSync6(ev.dir);
+  if (workspace && (dir === workspace || dir.startsWith(workspace + sep5)))
     throw new Error(`the evidence directory ${dir} is inside the checkout`);
   const ds = lstatSync4(ev.dir);
   if (!ds.isDirectory() || ds.uid !== uid)
@@ -230481,7 +230562,7 @@ async function isolateTests(env, ev, sink, platform2 = process.platform) {
       "/tmp",
       "/var/tmp",
       "/run",
-      realpathSync5(tmpdir5()),
+      realpathSync6(tmpdir5()),
       user.home,
       ...workspace ? [workspace] : []
     ]);

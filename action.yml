@@ -148,7 +148,7 @@ outputs:
   decision-file:
     description: 'phase select: the decision file written (for phase outcome).'
   record-file:
-    description: 'phase outcome: the ledger records (tensile.selection-record): the smart_execution decision and its outcome.'
+    description: 'phase outcome: the ledger records (tensile.selection-record): the smart_execution decision and its outcome. With service-url and id-token: write, also sent to the service (POST /v1/ledger/selection-records), which records it as a claim.'
   verdict:
     description: 'phase outcome: correct, miss or unknown.'
   missed:

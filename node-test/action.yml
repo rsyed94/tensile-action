@@ -2,13 +2,13 @@ name: Jiffy node:test recorder
 description: Record which functions and files each node:test test file uses, around an unchanged test command.
 author: Jiffy
 
-# - uses: rsyed94/tensile-action/node-test@v1    # before the test step
+# - uses: rsyed94/jiffy/node-test@<ref>    # before the test step
 #   id: jiffy
 #   with: { step: setup }
 # - run: npm test                           # node --test, tsx --test, c8 ...: unchanged
 #   env:
 #     NODE_OPTIONS: ${{ steps.jiffy.outputs.node-options }}
-# - uses: rsyed94/tensile-action/node-test@v1    # after it
+# - uses: rsyed94/jiffy/node-test@<ref>    # after it
 #   if: ${{ !cancelled() }}
 #   with: { step: collect }
 #

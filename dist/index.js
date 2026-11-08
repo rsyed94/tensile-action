@@ -466,6 +466,7 @@ var TOOLCHAIN_NAMES = /* @__PURE__ */ new Set([
   "nx.json",
   "lerna.json"
 ]);
+var ENV_FILE = /^\.env(\.|$)/;
 var TOOLCHAIN = [
   /^tsconfig(\..*)?\.json$/,
   /^jsconfig(\..*)?\.json$/,
@@ -495,6 +496,7 @@ function classify(path, opts = {}) {
   if (LOCKFILES.has(name2)) return "lockfile";
   if (MANIFESTS.has(name2)) return "manifest";
   if (TOOLCHAIN_NAMES.has(name2) || TOOLCHAIN.some((r) => r.test(name2))) return "toolchain";
+  if (ENV_FILE.test(name2) && !SOURCE_FILE.test(name2)) return "toolchain";
   if (CI.some((r) => r.test(path))) return "ci";
   if (SNAPSHOT.test(path) || SYRUPY.test(path)) return "snapshot";
   if (IGNORED.some((r) => r.test(path))) return "ignored";
@@ -694,6 +696,415 @@ function readBlobs(repo, specs) {
     o += size + 1;
   }
   return out2;
+}
+
+// ../engine/src/refs/resolve.ts
+import { builtinModules } from "node:module";
+var JS_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+var JS_FILE = /\.([cm]?[jt]sx?)$/;
+var OUT_DIRS = /^(dist|build|lib|out)\//;
+var isJs = (p) => JS_FILE.test(p) && !/\.d\.[cm]?ts$/.test(p);
+var isPy = (p) => p.endsWith(".py");
+var dirOf = (p) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
+var baseOf = (p) => p.slice(p.lastIndexOf("/") + 1);
+function normalize(path) {
+  const out2 = [];
+  for (const seg2 of path.split("/")) {
+    if (seg2 === "" || seg2 === ".") continue;
+    if (seg2 === "..") {
+      if (!out2.length) return null;
+      out2.pop();
+    } else out2.push(seg2);
+  }
+  return out2.join("/");
+}
+function names(path) {
+  const stem = baseOf(path).replace(/\.[^.]+$/, "");
+  if (stem !== "index" && stem !== "__init__") return [stem];
+  const dir = baseOf(dirOf(path));
+  const up = baseOf(dirOf(dirOf(path)));
+  return [dir, ...up && (dir === "src" || dir === "lib") ? [up] : []].filter(Boolean);
+}
+function stems(path) {
+  const stem = baseOf(path).replace(/\.[^.]+$/, "");
+  if (stem === "index") return [...names(path), "index", "'.", '".'];
+  if (stem === "__init__") return [...names(path), "from ."];
+  return [stem];
+}
+var BUILTINS = new Set(builtinModules);
+function alias(dir, key, values, base3) {
+  const targets = [];
+  const add2 = (v) => {
+    if (typeof v === "string") targets.push(v);
+    else if (Array.isArray(v)) v.forEach(add2);
+    else if (v && typeof v === "object") Object.values(v).forEach(add2);
+  };
+  values.forEach(add2);
+  const star = key.indexOf("*");
+  return {
+    dir,
+    key,
+    prefix: star < 0 ? null : key.slice(0, star),
+    suffix: star < 0 ? "" : key.slice(star + 1),
+    targets,
+    base: base3 || dir
+  };
+}
+var Resolver = class {
+  files;
+  byBase = /* @__PURE__ */ new Map();
+  pkgs;
+  entries = /* @__PURE__ */ new Map();
+  cache = /* @__PURE__ */ new Map();
+  tree;
+  /** Names of directories at the repo root and at the top of each package and its src/. */
+  dirs = /* @__PURE__ */ new Set();
+  /** Every dependency any package.json declares. */
+  deps = /* @__PURE__ */ new Set();
+  /** package.json `imports` and tsconfig `paths`, scoped to the directory that declares them. */
+  aliases = [];
+  /** `workspaces` defaults to every package.json at head with a name (outside node_modules). */
+  constructor(tree, workspaces) {
+    this.tree = tree;
+    this.files = new Set(tree.paths());
+    for (const f of this.files) {
+      if (!isPy(f)) continue;
+      const b = baseOf(f) === "__init__.py" ? baseOf(dirOf(f)) : baseOf(f).slice(0, -3);
+      const list3 = this.byBase.get(b);
+      if (list3) list3.push(f);
+      else this.byBase.set(b, [f]);
+    }
+    {
+      const manifests = [...this.files].filter(
+        (f) => (f === "package.json" || f.endsWith("/package.json")) && !f.includes("node_modules/")
+      );
+      tree.prefetch?.(manifests);
+      const found = [];
+      for (const m of manifests) {
+        try {
+          const pj = JSON.parse(tree.read(m) ?? "{}");
+          if (typeof pj.name === "string" && pj.name) found.push({ name: pj.name, root: dirOf(m) });
+          if (pj.imports && typeof pj.imports === "object")
+            for (const [k, v] of Object.entries(pj.imports)) this.aliases.push(alias(dirOf(m), k, [v], ""));
+          for (const k of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+            const d = pj[k];
+            if (d && typeof d === "object") for (const n of Object.keys(d)) this.deps.add(n);
+          }
+        } catch {
+        }
+      }
+      workspaces ??= found;
+      const configs = [...this.files].filter(
+        (f) => /(^|\/)[tj]sconfig[\w.-]*\.json$/.test(f) && !f.includes("node_modules/")
+      );
+      tree.prefetch?.(configs);
+      for (const f of configs) {
+        try {
+          const text = (tree.read(f) ?? "{}").replace(/\/\*[\s\S]*?\*\/|(^|[^:"])\/\/.*$/gm, "$1").replace(/,(\s*[}\]])/g, "$1");
+          const co = JSON.parse(text).compilerOptions;
+          const base3 = normalize(`${dirOf(f)}/${co?.baseUrl ?? "."}`) ?? "";
+          for (const [k, v] of Object.entries(co?.paths ?? {}))
+            this.aliases.push(alias(dirOf(f), k, v, base3));
+        } catch {
+        }
+      }
+    }
+    this.pkgs = [...workspaces].sort((a, b) => b.name.length - a.name.length);
+    const tops = ["", "src/", ...this.pkgs.flatMap((w) => w.root ? [`${w.root}/`, `${w.root}/src/`] : [])];
+    for (const f of this.files)
+      for (const t of isJs(f) ? tops : []) {
+        if (!f.startsWith(t)) continue;
+        const rest = f.slice(t.length);
+        const slash = rest.indexOf("/");
+        if (slash > 0) this.dirs.add(rest.slice(0, slash));
+      }
+  }
+  /** A Python file's module name below its source root: pkg/sub/mod.py -> pkg.sub.mod (when pkg/ is a package). */
+  pyModuleName(path) {
+    const parts2 = path.replace(/\.py$/, "").split("/");
+    if (parts2.at(-1) === "__init__") parts2.pop();
+    let i2 = parts2.length - 1;
+    while (i2 > 0 && this.files.has(`${parts2.slice(0, i2).join("/")}/__init__.py`)) i2--;
+    return parts2.slice(i2).join(".");
+  }
+  /** Names of the workspace packages whose directory holds `path`. */
+  packageNamesFor(path) {
+    return this.pkgs.filter((w) => !w.root || path.startsWith(w.root + "/")).map((w) => w.name);
+  }
+  /** A JS/TS specifier from `from` to repo files. */
+  js(from, spec) {
+    const key = `${dirOf(from)}\0${spec}`;
+    let r = this.cache.get(key);
+    if (r === void 0) this.cache.set(key, r = this.resolveJs(from, spec));
+    return r;
+  }
+  file(stem) {
+    if (this.files.has(stem) && isJs(stem)) return [stem];
+    const bare = stem.replace(/\.([cm]?js|jsx)$/, "");
+    for (const e of JS_EXTS) if (this.files.has(bare + e)) return [bare + e];
+    for (const e of JS_EXTS) if (this.files.has(`${stem}/index${e}`)) return [`${stem}/index${e}`];
+    return [];
+  }
+  resolveJs(from, spec) {
+    if (spec.startsWith(".") || spec.startsWith("/")) {
+      const p = normalize(spec.startsWith("/") ? spec : `${dirOf(from)}/${spec}`);
+      const f = p === null ? [] : this.file(p);
+      return f.length ? f : "unknown";
+    }
+    if (spec.startsWith("node:")) return "external";
+    const aliased = this.alias(from, spec);
+    if (aliased.length) return aliased;
+    if (spec.startsWith("#")) return "unknown";
+    const pkg = this.pkgs.find((w) => spec === w.name || spec.startsWith(w.name + "/"));
+    if (!pkg) {
+      const parts2 = spec.split("/");
+      const name2 = spec.startsWith("@") ? parts2.slice(0, 2).join("/") : parts2[0];
+      const dep = BUILTINS.has(name2) || this.deps.has(name2);
+      return dep && !this.dirs.has(parts2[0]) ? "external" : "unknown";
+    }
+    const sub = spec.slice(pkg.name.length + 1);
+    const found = sub ? this.subpath(pkg.root, sub) : this.entry(pkg.root);
+    return found.length ? found : "unknown";
+  }
+  /** Alias keys that may name `path` (`@cfg`, or the `@/` of `@/*`): substrings its importers contain. */
+  aliasNeedles(path) {
+    const out2 = [];
+    for (const a of this.aliases) {
+      if (a.prefix !== null) out2.push(a.prefix || a.suffix);
+      else if (a.targets.some(
+        (t) => normalize(`${a.base}/${t}`) === path || this.alias(a.dir ? `${a.dir}/x` : "x", a.key).includes(path)
+      ))
+        out2.push(a.key);
+    }
+    return out2.filter(Boolean);
+  }
+  alias(from, spec) {
+    for (const a of this.aliases) {
+      if (a.dir && !from.startsWith(a.dir + "/")) continue;
+      const star = a.prefix !== null && spec.startsWith(a.prefix) && spec.endsWith(a.suffix);
+      if (!(a.key === spec || star)) continue;
+      const mid = star ? spec.slice(a.prefix.length, spec.length - a.suffix.length) : "";
+      for (const t of a.targets) {
+        const p = normalize(`${a.base}/${t.replace("*", mid)}`);
+        const found = p === null ? [] : [...this.file(p), ...this.subpath("", p)];
+        if (found.length) return [...new Set(found)];
+      }
+    }
+    return [];
+  }
+  subpath(root, sub) {
+    const base3 = root ? `${root}/` : "";
+    const cands = [sub, sub.replace(OUT_DIRS, ""), sub.replace(OUT_DIRS, "src/"), `src/${sub}`];
+    for (const c of cands) {
+      const f = this.file(base3 + c);
+      if (f.length) return f;
+    }
+    return [];
+  }
+  /** A workspace package's entry file: package.json exports/module/main mapped back from build output. */
+  entry(root) {
+    const hit = this.entries.get(root);
+    if (hit) return hit;
+    const fields = [];
+    try {
+      const pj = JSON.parse(this.tree.read(root ? `${root}/package.json` : "package.json") ?? "{}");
+      const dot = (e) => {
+        if (typeof e === "string") fields.push(e);
+        else if (e && typeof e === "object") {
+          const o = e;
+          if ("." in o) dot(o["."]);
+          else
+            for (const k of ["source", "import", "module", "default", "require", "node"])
+              if (k in o) dot(o[k]);
+        }
+      };
+      for (const f of [pj.source, pj.module, pj.main]) if (f) fields.push(f);
+      dot(pj.exports);
+    } catch {
+    }
+    const out2 = /* @__PURE__ */ new Set();
+    for (const f of [...fields, "index", "src/index"])
+      for (const x of this.subpath(root, f.replace(/^\.\//, ""))) out2.add(x);
+    const r = [...out2];
+    this.entries.set(root, r);
+    return r;
+  }
+  /**
+   * A Python module (`a.b`, `.a.b`, `..`) imported from `from`: the files it can be. Absolute names match any
+   * file whose path ends with a/b.py or a/b/__init__.py, since we don't know the source roots.
+   */
+  py(from, spec) {
+    const key = `${spec.startsWith(".") ? dirOf(from) : ""}\0${spec}\0py`;
+    let r = this.cache.get(key);
+    if (r === void 0) this.cache.set(key, r = this.resolvePy(from, spec));
+    return r;
+  }
+  resolvePy(from, spec) {
+    const dots = /^\.*/.exec(spec)[0].length;
+    const rest = spec.slice(dots);
+    if (dots) {
+      let dir = dirOf(from);
+      for (let i2 = 1; i2 < dots; i2++) dir = dirOf(dir);
+      const p = [dir, ...rest ? rest.split(".") : []].filter(Boolean).join("/");
+      const out3 = [`${p}.py`, `${p}/__init__.py`].filter((f) => this.files.has(f));
+      return out3.length ? out3 : "unknown";
+    }
+    const parts2 = rest.split(".");
+    const last = parts2.at(-1);
+    const tail = parts2.join("/");
+    const rootOk = (f, matched) => {
+      const above = f.slice(0, f.length - matched.length - 1);
+      return !above || !this.files.has(`${above}/__init__.py`);
+    };
+    const out2 = (this.byBase.get(last) ?? []).filter(
+      (f) => [`${tail}.py`, `${tail}/__init__.py`].some((m) => (f === m || f.endsWith(`/${m}`)) && rootOk(f, m))
+    );
+    return out2.length ? out2 : "external";
+  }
+};
+function mayBe(r, spec, path) {
+  if (r === "external") return false;
+  if (r !== "unknown") return r.includes(path);
+  if (spec.startsWith(".") || spec.startsWith("/")) return false;
+  const last = baseOf(
+    spec.replace(/^#/, "").replace(/\/+$/, "").replace(/\/index(\.[cm]?[jt]sx?)?$/, "")
+  ).replace(/\.[cm]?[jt]sx?$/, "");
+  return names(path).includes(last);
+}
+
+// ../engine/src/globs.ts
+var CALL = /import\.meta\.(?:glob|globEager)\b|import\.meta\.webpackContext\b|\brequire\.context\b/g;
+var HINT = /import\.meta\.(?:glob|webpackContext)|require\.context/;
+var MAGIC = /[*?[\]{}()]/;
+var cache = /* @__PURE__ */ new Map();
+var MAX_BYTES = 2 * 1024 * 1024;
+var MAX_CALLS = 1e3;
+var GLOB_FILE = /\.(vue|svelte|astro|mdx|html?)$/;
+var CACHE_LIMIT = 5e4;
+var dirOf2 = (p) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
+function normalize2(p) {
+  const out2 = [];
+  for (const s of p.split("/")) {
+    if (s === "" || s === ".") continue;
+    if (s === "..") {
+      if (!out2.length) return null;
+      out2.pop();
+    } else out2.push(s);
+  }
+  return out2.join("/");
+}
+function literal(src, i2) {
+  const q = src[i2];
+  if (q !== "'" && q !== '"' && q !== "`") return null;
+  let v = "";
+  for (let j = i2 + 1; j < src.length && j < i2 + 4096; j++) {
+    const c = src[j];
+    if (c === "\\") {
+      v += src[++j] ?? "";
+      continue;
+    }
+    if (q === "`" && c === "$" && src[j + 1] === "{") return null;
+    if (c === q) return { value: v, end: j + 1 };
+    if (c === "\n" && q !== "`") return null;
+    v += c;
+  }
+  return null;
+}
+var skipSpace = (src, i2) => {
+  while (i2 < src.length && /\s/.test(src[i2])) i2++;
+  return i2;
+};
+function firstArg(src, i2) {
+  i2 = skipSpace(src, i2);
+  if (src[i2] === "<") {
+    const close = src.slice(i2, i2 + 500).indexOf(">");
+    if (close < 0) return null;
+    i2 = skipSpace(src, i2 + close + 1);
+  }
+  if (src[i2] !== "(") return null;
+  i2 = skipSpace(src, i2 + 1);
+  if (src[i2] !== "[") {
+    const l = literal(src, i2);
+    return l && { values: [l.value], end: l.end };
+  }
+  const values = [];
+  i2 = skipSpace(src, i2 + 1);
+  while (src[i2] !== "]") {
+    const l = literal(src, i2);
+    if (!l) return null;
+    values.push(l.value);
+    i2 = skipSpace(src, l.end);
+    if (src[i2] === ",") i2 = skipSpace(src, i2 + 1);
+    else if (src[i2] !== "]") return null;
+  }
+  return { values, end: i2 + 1 };
+}
+function globDirs(file, src) {
+  if (!HINT.test(src)) return [];
+  if (src.length > MAX_BYTES) return null;
+  const dirs = /* @__PURE__ */ new Set();
+  const here = dirOf2(file);
+  const ancestors = [];
+  for (let d = here; ; d = dirOf2(d)) {
+    ancestors.push(d);
+    if (!d) break;
+  }
+  let calls = 0;
+  for (const m of src.matchAll(CALL)) {
+    const after = skipSpace(src, m.index + m[0].length);
+    if (src[after] !== "(" && src[after] !== "<") {
+      if (src[after] === "/" || src[after] === ")" || src[m.index - 1] === "(") return null;
+      continue;
+    }
+    if (++calls > MAX_CALLS) return null;
+    const arg = firstArg(src, after);
+    if (!arg) return null;
+    const isGlob = m[0].includes("glob");
+    if (isGlob) {
+      if (/\bbase\b/.test(src.slice(arg.end, arg.end + 2e3))) return null;
+    }
+    for (const pat of arg.values) {
+      if (isGlob && pat.startsWith("!")) continue;
+      const segs = pat.split("/");
+      let n = segs.findIndex((s) => MAGIC.test(s));
+      if (n < 0) n = isGlob ? segs.length - 1 : segs.length;
+      const prefix = segs.slice(0, n).join("/");
+      if (pat.startsWith("./") || pat.startsWith("../") || !isGlob && (pat === "." || pat === "..")) {
+        const d = normalize2(`${here}/${prefix}`);
+        dirs.add(d ?? "");
+      } else if (pat.startsWith("/")) {
+        for (const a of ancestors) dirs.add(normalize2(`${a}/${prefix}`) ?? "");
+      } else return null;
+    }
+  }
+  return [...dirs];
+}
+function globSites(tree) {
+  const files = tree.paths().filter((p) => (isJs(p) || GLOB_FILE.test(p)) && !p.includes("node_modules/"));
+  const uncached = files.filter((p) => {
+    const id = tree.id?.(p);
+    return !id || !cache.has(id);
+  });
+  tree.prefetch?.(uncached);
+  const out2 = [];
+  for (const f of files) {
+    const id = tree.id?.(f);
+    let hit = id ? cache.get(id) : void 0;
+    if (hit === void 0) {
+      const src = tree.read(f);
+      const dirs = src === null ? [] : globDirs(f, src);
+      hit = dirs !== null && !dirs.length ? false : dirs;
+      if (id) {
+        if (cache.size >= CACHE_LIMIT) cache.clear();
+        cache.set(id, hit);
+      }
+    }
+    if (hit !== false) out2.push({ file: f, dirs: hit });
+  }
+  return out2;
+}
+function underDirs(path, dirs) {
+  return dirs === null || dirs.some((d) => d === "" || path.startsWith(d + "/"));
 }
 
 // ../engine/src/spans/python.ts
@@ -5234,280 +5645,6 @@ function pyRefs(_path, source) {
   }
 }
 
-// ../engine/src/refs/resolve.ts
-import { builtinModules } from "node:module";
-var JS_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
-var JS_FILE = /\.([cm]?[jt]sx?)$/;
-var OUT_DIRS = /^(dist|build|lib|out)\//;
-var isJs = (p) => JS_FILE.test(p) && !/\.d\.[cm]?ts$/.test(p);
-var isPy = (p) => p.endsWith(".py");
-var dirOf = (p) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
-var baseOf = (p) => p.slice(p.lastIndexOf("/") + 1);
-function normalize(path) {
-  const out2 = [];
-  for (const seg2 of path.split("/")) {
-    if (seg2 === "" || seg2 === ".") continue;
-    if (seg2 === "..") {
-      if (!out2.length) return null;
-      out2.pop();
-    } else out2.push(seg2);
-  }
-  return out2.join("/");
-}
-function names(path) {
-  const stem = baseOf(path).replace(/\.[^.]+$/, "");
-  if (stem !== "index" && stem !== "__init__") return [stem];
-  const dir = baseOf(dirOf(path));
-  const up = baseOf(dirOf(dirOf(path)));
-  return [dir, ...up && (dir === "src" || dir === "lib") ? [up] : []].filter(Boolean);
-}
-function stems(path) {
-  const stem = baseOf(path).replace(/\.[^.]+$/, "");
-  if (stem === "index") return [...names(path), "index", "'.", '".'];
-  if (stem === "__init__") return [...names(path), "from ."];
-  return [stem];
-}
-var BUILTINS = new Set(builtinModules);
-function alias(dir, key, values, base3) {
-  const targets = [];
-  const add2 = (v) => {
-    if (typeof v === "string") targets.push(v);
-    else if (Array.isArray(v)) v.forEach(add2);
-    else if (v && typeof v === "object") Object.values(v).forEach(add2);
-  };
-  values.forEach(add2);
-  const star = key.indexOf("*");
-  return {
-    dir,
-    key,
-    prefix: star < 0 ? null : key.slice(0, star),
-    suffix: star < 0 ? "" : key.slice(star + 1),
-    targets,
-    base: base3 || dir
-  };
-}
-var Resolver = class {
-  files;
-  byBase = /* @__PURE__ */ new Map();
-  pkgs;
-  entries = /* @__PURE__ */ new Map();
-  cache = /* @__PURE__ */ new Map();
-  tree;
-  /** Names of directories at the repo root and at the top of each package and its src/. */
-  dirs = /* @__PURE__ */ new Set();
-  /** Every dependency any package.json declares. */
-  deps = /* @__PURE__ */ new Set();
-  /** package.json `imports` and tsconfig `paths`, scoped to the directory that declares them. */
-  aliases = [];
-  /** `workspaces` defaults to every package.json at head with a name (outside node_modules). */
-  constructor(tree, workspaces) {
-    this.tree = tree;
-    this.files = new Set(tree.paths());
-    for (const f of this.files) {
-      if (!isPy(f)) continue;
-      const b = baseOf(f) === "__init__.py" ? baseOf(dirOf(f)) : baseOf(f).slice(0, -3);
-      const list3 = this.byBase.get(b);
-      if (list3) list3.push(f);
-      else this.byBase.set(b, [f]);
-    }
-    {
-      const manifests = [...this.files].filter(
-        (f) => (f === "package.json" || f.endsWith("/package.json")) && !f.includes("node_modules/")
-      );
-      tree.prefetch?.(manifests);
-      const found = [];
-      for (const m of manifests) {
-        try {
-          const pj = JSON.parse(tree.read(m) ?? "{}");
-          if (typeof pj.name === "string" && pj.name) found.push({ name: pj.name, root: dirOf(m) });
-          if (pj.imports && typeof pj.imports === "object")
-            for (const [k, v] of Object.entries(pj.imports)) this.aliases.push(alias(dirOf(m), k, [v], ""));
-          for (const k of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
-            const d = pj[k];
-            if (d && typeof d === "object") for (const n of Object.keys(d)) this.deps.add(n);
-          }
-        } catch {
-        }
-      }
-      workspaces ??= found;
-      const configs = [...this.files].filter(
-        (f) => /(^|\/)[tj]sconfig[\w.-]*\.json$/.test(f) && !f.includes("node_modules/")
-      );
-      tree.prefetch?.(configs);
-      for (const f of configs) {
-        try {
-          const text = (tree.read(f) ?? "{}").replace(/\/\*[\s\S]*?\*\/|(^|[^:"])\/\/.*$/gm, "$1").replace(/,(\s*[}\]])/g, "$1");
-          const co = JSON.parse(text).compilerOptions;
-          const base3 = normalize(`${dirOf(f)}/${co?.baseUrl ?? "."}`) ?? "";
-          for (const [k, v] of Object.entries(co?.paths ?? {}))
-            this.aliases.push(alias(dirOf(f), k, v, base3));
-        } catch {
-        }
-      }
-    }
-    this.pkgs = [...workspaces].sort((a, b) => b.name.length - a.name.length);
-    const tops = ["", "src/", ...this.pkgs.flatMap((w) => w.root ? [`${w.root}/`, `${w.root}/src/`] : [])];
-    for (const f of this.files)
-      for (const t of isJs(f) ? tops : []) {
-        if (!f.startsWith(t)) continue;
-        const rest = f.slice(t.length);
-        const slash = rest.indexOf("/");
-        if (slash > 0) this.dirs.add(rest.slice(0, slash));
-      }
-  }
-  /** A Python file's module name below its source root: pkg/sub/mod.py -> pkg.sub.mod (when pkg/ is a package). */
-  pyModuleName(path) {
-    const parts2 = path.replace(/\.py$/, "").split("/");
-    if (parts2.at(-1) === "__init__") parts2.pop();
-    let i2 = parts2.length - 1;
-    while (i2 > 0 && this.files.has(`${parts2.slice(0, i2).join("/")}/__init__.py`)) i2--;
-    return parts2.slice(i2).join(".");
-  }
-  /** Names of the workspace packages whose directory holds `path`. */
-  packageNamesFor(path) {
-    return this.pkgs.filter((w) => !w.root || path.startsWith(w.root + "/")).map((w) => w.name);
-  }
-  /** A JS/TS specifier from `from` to repo files. */
-  js(from, spec) {
-    const key = `${dirOf(from)}\0${spec}`;
-    let r = this.cache.get(key);
-    if (r === void 0) this.cache.set(key, r = this.resolveJs(from, spec));
-    return r;
-  }
-  file(stem) {
-    if (this.files.has(stem) && isJs(stem)) return [stem];
-    const bare = stem.replace(/\.([cm]?js|jsx)$/, "");
-    for (const e of JS_EXTS) if (this.files.has(bare + e)) return [bare + e];
-    for (const e of JS_EXTS) if (this.files.has(`${stem}/index${e}`)) return [`${stem}/index${e}`];
-    return [];
-  }
-  resolveJs(from, spec) {
-    if (spec.startsWith(".") || spec.startsWith("/")) {
-      const p = normalize(spec.startsWith("/") ? spec : `${dirOf(from)}/${spec}`);
-      const f = p === null ? [] : this.file(p);
-      return f.length ? f : "unknown";
-    }
-    if (spec.startsWith("node:")) return "external";
-    const aliased = this.alias(from, spec);
-    if (aliased.length) return aliased;
-    if (spec.startsWith("#")) return "unknown";
-    const pkg = this.pkgs.find((w) => spec === w.name || spec.startsWith(w.name + "/"));
-    if (!pkg) {
-      const parts2 = spec.split("/");
-      const name2 = spec.startsWith("@") ? parts2.slice(0, 2).join("/") : parts2[0];
-      const dep = BUILTINS.has(name2) || this.deps.has(name2);
-      return dep && !this.dirs.has(parts2[0]) ? "external" : "unknown";
-    }
-    const sub = spec.slice(pkg.name.length + 1);
-    const found = sub ? this.subpath(pkg.root, sub) : this.entry(pkg.root);
-    return found.length ? found : "unknown";
-  }
-  /** Alias keys that may name `path` (`@cfg`, or the `@/` of `@/*`): substrings its importers contain. */
-  aliasNeedles(path) {
-    const out2 = [];
-    for (const a of this.aliases) {
-      if (a.prefix !== null) out2.push(a.prefix || a.suffix);
-      else if (a.targets.some(
-        (t) => normalize(`${a.base}/${t}`) === path || this.alias(a.dir ? `${a.dir}/x` : "x", a.key).includes(path)
-      ))
-        out2.push(a.key);
-    }
-    return out2.filter(Boolean);
-  }
-  alias(from, spec) {
-    for (const a of this.aliases) {
-      if (a.dir && !from.startsWith(a.dir + "/")) continue;
-      const star = a.prefix !== null && spec.startsWith(a.prefix) && spec.endsWith(a.suffix);
-      if (!(a.key === spec || star)) continue;
-      const mid = star ? spec.slice(a.prefix.length, spec.length - a.suffix.length) : "";
-      for (const t of a.targets) {
-        const p = normalize(`${a.base}/${t.replace("*", mid)}`);
-        const found = p === null ? [] : [...this.file(p), ...this.subpath("", p)];
-        if (found.length) return [...new Set(found)];
-      }
-    }
-    return [];
-  }
-  subpath(root, sub) {
-    const base3 = root ? `${root}/` : "";
-    const cands = [sub, sub.replace(OUT_DIRS, ""), sub.replace(OUT_DIRS, "src/"), `src/${sub}`];
-    for (const c of cands) {
-      const f = this.file(base3 + c);
-      if (f.length) return f;
-    }
-    return [];
-  }
-  /** A workspace package's entry file: package.json exports/module/main mapped back from build output. */
-  entry(root) {
-    const hit = this.entries.get(root);
-    if (hit) return hit;
-    const fields = [];
-    try {
-      const pj = JSON.parse(this.tree.read(root ? `${root}/package.json` : "package.json") ?? "{}");
-      const dot = (e) => {
-        if (typeof e === "string") fields.push(e);
-        else if (e && typeof e === "object") {
-          const o = e;
-          if ("." in o) dot(o["."]);
-          else
-            for (const k of ["source", "import", "module", "default", "require", "node"])
-              if (k in o) dot(o[k]);
-        }
-      };
-      for (const f of [pj.source, pj.module, pj.main]) if (f) fields.push(f);
-      dot(pj.exports);
-    } catch {
-    }
-    const out2 = /* @__PURE__ */ new Set();
-    for (const f of [...fields, "index", "src/index"])
-      for (const x of this.subpath(root, f.replace(/^\.\//, ""))) out2.add(x);
-    const r = [...out2];
-    this.entries.set(root, r);
-    return r;
-  }
-  /**
-   * A Python module (`a.b`, `.a.b`, `..`) imported from `from`: the files it can be. Absolute names match any
-   * file whose path ends with a/b.py or a/b/__init__.py, since we don't know the source roots.
-   */
-  py(from, spec) {
-    const key = `${spec.startsWith(".") ? dirOf(from) : ""}\0${spec}\0py`;
-    let r = this.cache.get(key);
-    if (r === void 0) this.cache.set(key, r = this.resolvePy(from, spec));
-    return r;
-  }
-  resolvePy(from, spec) {
-    const dots = /^\.*/.exec(spec)[0].length;
-    const rest = spec.slice(dots);
-    if (dots) {
-      let dir = dirOf(from);
-      for (let i2 = 1; i2 < dots; i2++) dir = dirOf(dir);
-      const p = [dir, ...rest ? rest.split(".") : []].filter(Boolean).join("/");
-      const out3 = [`${p}.py`, `${p}/__init__.py`].filter((f) => this.files.has(f));
-      return out3.length ? out3 : "unknown";
-    }
-    const parts2 = rest.split(".");
-    const last = parts2.at(-1);
-    const tail = parts2.join("/");
-    const rootOk = (f, matched) => {
-      const above = f.slice(0, f.length - matched.length - 1);
-      return !above || !this.files.has(`${above}/__init__.py`);
-    };
-    const out2 = (this.byBase.get(last) ?? []).filter(
-      (f) => [`${tail}.py`, `${tail}/__init__.py`].some((m) => (f === m || f.endsWith(`/${m}`)) && rootOk(f, m))
-    );
-    return out2.length ? out2 : "external";
-  }
-};
-function mayBe(r, spec, path) {
-  if (r === "external") return false;
-  if (r !== "unknown") return r.includes(path);
-  if (spec.startsWith(".") || spec.startsWith("/")) return false;
-  const last = baseOf(
-    spec.replace(/^#/, "").replace(/\/+$/, "").replace(/\/index(\.[cm]?[jt]sx?)?$/, "")
-  ).replace(/\.[cm]?[jt]sx?$/, "");
-  return names(path).includes(last);
-}
-
 // ../../node_modules/.pnpm/oxc-parser@0.157.0/node_modules/oxc-parser/src-js/index.js
 import { createRequire as createRequire3 } from "node:module";
 
@@ -7293,14 +7430,14 @@ function resolveReferences(seeds, ctx) {
     else if (!res.fileLevel.has(path)) res.fileLevel.set(path, why);
   };
   const sourcesOf = /* @__PURE__ */ (() => {
-    const cache = /* @__PURE__ */ new Map();
+    const cache2 = /* @__PURE__ */ new Map();
     return (lang) => {
-      let list3 = cache.get(lang);
+      let list3 = cache2.get(lang);
       if (!list3) {
         const test = lang === "js" ? isJs : isPy;
         list3 = tree.paths().filter((p) => test(p) && !p.includes("node_modules/"));
         tree.prefetch?.(list3);
-        cache.set(lang, list3);
+        cache2.set(lang, list3);
       }
       return list3;
     };
@@ -7854,7 +7991,11 @@ function analyzeChanges(diffs, read, opts = {}) {
     const kind = classify(d.path, { knownTests: opts.knownTests });
     const fc = { path: d.path, kind, status: d.status, units: [] };
     cs.files.push(fc);
-    if (kind === "ignored" || kind === "ci" && opts.ciConfig === "ignore") continue;
+    if (kind === "ignored") {
+      fc.fileLevel = "read";
+      continue;
+    }
+    if (kind === "ci" && opts.ciConfig === "ignore") continue;
     if (kind === "test") {
       cs.changedTests.add(d.path);
       continue;
@@ -7967,6 +8108,19 @@ function analyzeChanges(diffs, read, opts = {}) {
       else cs.refImporters.set(p, new Set(imps));
     }
   }
+  const listed = cs.files.filter(
+    (f) => !f.runAll && (f.status === "added" || f.status === "deleted" || f.kind === "ignored")
+  );
+  if (listed.length && opts.tree) {
+    const isTest = (p) => !!opts.knownTests?.has(p) || classify(p) === "test";
+    for (const site of globSites(opts.tree)) {
+      const hits = listed.filter((f) => f.path !== site.file && underDirs(f.path, site.dirs));
+      if (!hits.length) continue;
+      if (isTest(site.file)) cs.refTests.add(site.file);
+      else cs.fileLevel.add(site.file);
+      for (const f of hits) f.note = [f.note, `in a directory ${site.file} globs`].filter(Boolean).join("; ");
+    }
+  }
   for (const fc of cs.files) if (fc.fileLevel) cs.fileLevel.add(fc.path);
   return cs;
 }
@@ -7991,7 +8145,7 @@ function changesFromGit(repo, base3, head, opts = {}) {
 
 // ../engine/src/coverage/format.ts
 import { gunzipSync, gzipSync } from "node:zlib";
-var MAGIC = "JFYM";
+var MAGIC2 = "JFYM";
 var VERSION = 1;
 var Reader = class {
   o = 0;
@@ -8026,7 +8180,7 @@ function decodeMap(gz, limits = {}) {
       throw new Error(`coverage map is larger than ${limits.maxBytes ?? MAX_MAP_BYTES} bytes uncompressed`);
     throw e;
   }
-  if (buf.toString("ascii", 0, 4) !== MAGIC) throw new Error("not a Jiffy coverage map");
+  if (buf.toString("ascii", 0, 4) !== MAGIC2) throw new Error("not a Jiffy coverage map");
   if (buf[4] !== VERSION) throw new Error(`unsupported coverage map version ${buf[4]}`);
   const r = new Reader(buf);
   r.o = 5;
@@ -8066,6 +8220,22 @@ function decodeMap(gz, limits = {}) {
 
 // ../engine/src/coverage/reads.ts
 var READS_MARK = fnId("", "jiffy:reads");
+var READS_VERSION = 1;
+
+// ../engine/src/coverage/parts.ts
+var PART_FORMAT = 2;
+var FORMAT_MARK = fnId("", `jiffy:v${PART_FORMAT}`);
+var CHILDREN_MARK = fnId("", "jiffy:children");
+var CHILDREN_VERSION = 1;
+function mapAlwaysRun(map) {
+  const v = map.meta.alwaysRun;
+  if (v === void 0) return [];
+  if (!Array.isArray(v) || !v.every((t) => typeof t === "string" && t !== "")) return null;
+  return v;
+}
+function mapMarks(map) {
+  return { reads: map.meta.reads === READS_VERSION, children: map.meta.children === CHILDREN_VERSION };
+}
 
 // ../engine/src/durations.ts
 function durationsFromReport(report, root) {
@@ -8377,6 +8547,9 @@ function select({ changes, map, allTests, always }) {
     return { runAll: true, tests, skipped: [] };
   };
   if (!map) return everything({ kind: "no-coverage-map" });
+  const alwaysRun = mapAlwaysRun(map);
+  if (alwaysRun === null) return everything({ kind: "no-coverage-map" });
+  for (const t of alwaysRun) universe.add(t);
   if (changes.runAll.length) return everything({ kind: "run-all", triggers: changes.runAll });
   for (const t of changes.changedTests) add2(t, { kind: "changed-test" });
   for (const t of changes.refTests) {
@@ -8395,6 +8568,8 @@ function select({ changes, map, allTests, always }) {
   }
   for (const t of universe)
     if (!map.tests.has(t) && !changes.changedTests.has(t)) add2(t, { kind: "no-coverage-record" });
+  for (const t of alwaysRun)
+    if (map.tests.has(t) && !changes.changedTests.has(t)) add2(t, { kind: "no-coverage-record" });
   if (changes.units.size || fileLevel.size || refUnits.length || changes.refImporters.size) {
     const withAny = (units) => new Map([...units].map((u) => [u, fnId(splitFnId(u)[0], ANY_FN)]));
     const anyFn = withAny(changes.units);
@@ -8421,6 +8596,26 @@ function select({ changes, map, allTests, always }) {
       if (files.length) add2(t, { kind: "module", files });
     }
   }
+  const byDir = /* @__PURE__ */ new Map();
+  for (const f of changes.files) {
+    if (f.runAll || f.status !== "added" && f.status !== "deleted") continue;
+    for (let i2 = f.path.indexOf("/"), d = "./"; ; i2 = f.path.indexOf("/", i2 + 1)) {
+      const l = byDir.get(d);
+      if (l) l.push(f.path);
+      else byDir.set(d, [f.path]);
+      if (i2 < 0) break;
+      d = f.path.slice(0, i2 + 1);
+    }
+  }
+  if (byDir.size)
+    for (const [t, cov] of map.tests) {
+      let files = null;
+      for (const l of cov.loaded) {
+        if (!l.endsWith("/")) continue;
+        for (const f of byDir.get(l) ?? []) (files ??= /* @__PURE__ */ new Set()).add(f);
+      }
+      if (files) add2(t, { kind: "module", files: [...files].sort() });
+    }
   for (const { root, path } of changes.packageScopes) {
     for (const t of universe) {
       if (!t.startsWith(root + "/")) continue;
@@ -8476,7 +8671,15 @@ function mapStaleness(repo, map, base3, now, createdAt, bounds) {
   const ageDays = (now - oldest) / 864e5;
   if (bounds.maxAgeDays > 0 && ageDays > bounds.maxAgeDays)
     return `stale coverage map: its commit is ${ageDays.toFixed(1)} days old (max ${bounds.maxAgeDays})`;
-  return { commit, distance, ageDays: Math.round(ageDays * 100) / 100 };
+  const alwaysRun = mapAlwaysRun(map);
+  if (alwaysRun === null) return "coverage map meta.alwaysRun is malformed";
+  return {
+    commit,
+    distance,
+    ageDays: Math.round(ageDays * 100) / 100,
+    ...mapMarks(map),
+    alwaysRun: alwaysRun.length
+  };
 }
 function packageOf(roots, p) {
   let best = null;
@@ -8559,6 +8762,94 @@ function staticReach(tree, changed, isTest, maxFiles, workspaces) {
   const orphans = changed.filter((f) => !importers.get(f)?.size);
   return { tests, exhausted: null, parsed: code3.length, orphans };
 }
+var SPAWN = new RegExp(
+  [
+    /['"`](?:node:)?(?:child_process|worker_threads|cluster)['"`]/,
+    /['"`](?:execa|zx|cross-spawn|tinyexec|nano-spawn|@npmcli\/promise-spawn|tinypool|piscina|workerpool|threads|shelljs|node-pty|@lydell\/node-pty|concurrently)(?:\/[^'"`]*)?['"`]/,
+    /\b(?:spawn|spawnSync|fork|execa|execaSync|execaNode|execaCommand|execaCommandSync)\s*\(/,
+    /\$\s*`/,
+    /process\.execPath|\bnew\s+(?:Worker|Tinypool|Piscina)\s*\(|\bBun\.spawn/,
+    /^[ \t]*(?:import|from)\s+(?:subprocess|multiprocessing|concurrent\.futures|pty|pexpect)\b/,
+    /\bsubprocess\.|\bmultiprocessing\b|\bProcessPoolExecutor\b|\bsys\.executable\b/,
+    /\bcreate_subprocess_(?:exec|shell)\b|\brunpytest_subprocess\b|\bspawn_pytest\b|\bpytester\b|\btestdir\b/,
+    /^[ \t]*(?:import|from)\s+(?:sh|plumbum)\b/,
+    /^[ \t]*from\s+os\s+import\b[^\n]*\b(?:system|popen|exec\w*|spawn\w*|fork\w*|posix_spawn\w*)\b/,
+    /\bos\.(?:system|popen|fork|forkpty|exec\w*|spawn\w*|posix_spawn\w*)\s*\(/
+  ].map((r) => r.source).join("|"),
+  "m"
+);
+function spawners(tree, tests, workspaces, depth = 3) {
+  const ctx = { tree, ...workspaces && { workspaces } };
+  let byName = null;
+  const named = (stem) => {
+    if (!byName) {
+      byName = /* @__PURE__ */ new Map();
+      for (const f of tree.paths())
+        if ((isJs(f) || isPy(f)) && !f.includes("node_modules/"))
+          for (const n of names(f)) {
+            const l = byName.get(n);
+            if (l) l.push(f);
+            else byName.set(n, [f]);
+          }
+    }
+    return byName.get(stem) ?? [];
+  };
+  const direct = /* @__PURE__ */ new Map();
+  const imports = /* @__PURE__ */ new Map();
+  const spawns = (f) => {
+    let v = direct.get(f);
+    if (v === void 0) {
+      const src = tree.read(f);
+      v = src !== null && (src.length > 2 * 1024 * 1024 || SPAWN.test(src));
+      direct.set(f, v);
+    }
+    return v;
+  };
+  const importsOf = (f) => {
+    let l = imports.get(f);
+    if (!l) {
+      l = [];
+      const src = tree.read(f);
+      const specs = src === null ? [] : staticSpecs(f, src);
+      if (specs !== "unreadable")
+        for (const s of specs) {
+          const r = resolveSpecAll(ctx, f, s);
+          if (Array.isArray(r)) l.push(...r.filter((x) => isJs(x) || isPy(x)));
+          else if (r === "unknown") {
+            const last = (isPy(f) ? s.split(".") : s.replace(/\/+$/, "").split("/")).at(-1) ?? "";
+            const stem = last.replace(/^#/, "").replace(/\.[cm]?[jt]sx?$/, "");
+            l.push(...named(stem).filter((x) => x !== f && mayBe(r, s, x)));
+          }
+        }
+      imports.set(f, l);
+    }
+    return l;
+  };
+  tree.prefetch?.(tests);
+  const out2 = /* @__PURE__ */ new Map();
+  for (const t of tests) {
+    const seen = /* @__PURE__ */ new Set([t]);
+    const hits = [];
+    let frontier = [t];
+    for (let d = 0; d <= depth && frontier.length; d++) {
+      const next = [];
+      for (const f of frontier) {
+        if (spawns(f)) hits.push(f);
+        if (d < depth) {
+          for (const i2 of importsOf(f))
+            if (!seen.has(i2)) {
+              seen.add(i2);
+              next.push(i2);
+            }
+        }
+      }
+      tree.prefetch?.(next);
+      frontier = next;
+    }
+    if (hits.length) out2.set(t, hits.sort());
+  }
+  return out2;
+}
 var RUNNER_CONFIG = /(^|\/)(vite|vitest|jest|webpack|rollup|babel|rspack)\.(config|workspace)(\.[\w-]+)*\.[cm]?[jt]s(on)?$|(^|\/)\.babelrc(\.json)?$/;
 var ALIAS_OR_PLUGIN = /\b(alias|moduleNameMapper|resolveId|plugins|modulePaths|moduleDirectories)\b/;
 function opaqueRunnerConfigs(tree) {
@@ -8624,7 +8915,8 @@ function planSelection(input) {
         map: mapInfo
       }
     );
-  const knownTests = /* @__PURE__ */ new Set([...input.map?.tests.keys() ?? [], ...headTests(tree)]);
+  const alwaysRun = input.map ? mapAlwaysRun(input.map) ?? [] : [];
+  const knownTests = /* @__PURE__ */ new Set([...input.map?.tests.keys() ?? [], ...alwaysRun, ...headTests(tree)]);
   const universeSet = new Set(knownTests);
   const headFiles = new Set(tree.paths());
   for (const t of input.allTests ?? [])
@@ -8642,7 +8934,7 @@ function planSelection(input) {
     if (f.kind === "ignored" && FIXTURE_DIR.test(f.path))
       reasons.push(`changed ${f.path} (in a test or fixture directory, so a test may read it)`);
   if (input.map) {
-    const odd = [...input.map.tests.keys()].find((t) => classify(t) !== "test");
+    const odd = [...input.map.tests.keys(), ...alwaysRun].find((t) => classify(t) !== "test");
     if (odd) {
       for (const f of changes.files)
         if (f.status === "added" && f.kind === "source" && !knownTests.has(f.path))
@@ -8699,6 +8991,16 @@ function planSelection(input) {
     for (const f of changes.changedTests)
       for (const [t, rec] of input.map.tests)
         if (t !== f && rec.loaded.has(f) && universeSet.has(t)) add2(t, { kind: "module", files: [f] });
+  }
+  if (basis === "coverage" && mapInfo && !mapInfo.children) {
+    const t4 = performance.now();
+    for (const [t, files] of spawners(
+      tree,
+      universe.filter((t5) => !tests.has(t5)),
+      graph
+    ))
+      add2(t, { kind: "spawns", files });
+    timings.staticMs += ms(t4, performance.now());
   }
   if (basis === "package") {
     const wouldSkip = universe.some((t) => !tests.has(t));
@@ -8767,7 +9069,7 @@ function fullRunShards(n) {
 // src/summary.ts
 var MAX_ROWS = 300;
 var MAX_SKIPPED = 1e3;
-var MAX_BYTES = 9e5;
+var MAX_BYTES2 = 9e5;
 var esc = (s) => s.replace(/[&<>"'|`]/g, (c) => `&#${c.charCodeAt(0)};`).replace(/\r?\n/g, " ");
 var code = (s) => `<code>${esc(s)}</code>`;
 var list = (xs, n = 3) => xs.slice(0, n).map(code).join(", ") + (xs.length > n ? ` and ${xs.length - n} more` : "");
@@ -8926,8 +9228,8 @@ function renderSummary(r) {
     out2.push("", "</details>", "");
   }
   let md = out2.join("\n") + "\n";
-  if (Buffer.byteLength(md) > MAX_BYTES)
-    md = Buffer.from(md).subarray(0, MAX_BYTES).toString("utf8") + "\n\n\u2026 summary truncated\n";
+  if (Buffer.byteLength(md) > MAX_BYTES2)
+    md = Buffer.from(md).subarray(0, MAX_BYTES2).toString("utf8") + "\n\n\u2026 summary truncated\n";
   return md;
 }
 
@@ -10010,7 +10312,7 @@ var esc2 = (s) => s.replace(/[&<>"'|`]/g, (c) => `&#${c.charCodeAt(0)};`).replac
 var code2 = (s) => `<code>${esc2(s)}</code>`;
 var list2 = (xs, n = 3) => xs.slice(0, n).map(code2).join(", ") + (xs.length > n ? ` and ${xs.length - n} more` : "");
 var MAX_ROWS2 = 200;
-var MAX_BYTES2 = 9e5;
+var MAX_BYTES3 = 9e5;
 function describePlanReason(r) {
   switch (r.kind) {
     case "static":
@@ -10019,12 +10321,14 @@ function describePlanReason(r) {
       return `failed recently (${esc2(r.failedAt.slice(0, 10))}) in an affected package`;
     case "package-grain":
       return `no coverage map; ${code2(r.root)} is affected`;
+    case "spawns":
+      return `starts processes the map's recorder didn't follow (${list2(r.files)})`;
     default:
       return describeReason(r);
   }
 }
 function cap2(md) {
-  return Buffer.byteLength(md) > MAX_BYTES2 ? md.slice(0, MAX_BYTES2) + "\n\n(truncated)\n" : md;
+  return Buffer.byteLength(md) > MAX_BYTES3 ? md.slice(0, MAX_BYTES3) + "\n\n(truncated)\n" : md;
 }
 function renderDecision(d) {
   const out2 = [`### Tensile selection (${d.mode})`, ""];
@@ -10153,9 +10457,45 @@ function runOutcomePhase(env, sink, decisionFile) {
 }
 function runPost(env, sink) {
   const decisionFile = env.STATE_decision;
-  if (!decisionFile || !getInput(env, "report")) return;
-  if (existsSync(recordPath(decisionFile))) return;
-  runOutcomePhase(env, sink, decisionFile);
+  if (!decisionFile || !getInput(env, "report")) return null;
+  if (existsSync(recordPath(decisionFile))) return null;
+  return runOutcomePhase(env, sink, decisionFile);
+}
+var RECORD_UPLOAD_PATH = "/v1/ledger/selection-records";
+async function sendRecord(env, sink, record, opts = {}) {
+  if (!record) return "skipped";
+  let url;
+  try {
+    url = parseServiceUrl(getInput(env, "service-url"));
+  } catch (e) {
+    sink.warning(`selection record not sent: ${e.message}`);
+    return "failed";
+  }
+  if (!url) return "skipped";
+  if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+    sink.warning(
+      "selection record not sent: no OIDC token (the job needs `permissions: id-token: write`; fork and Dependabot PRs get none)"
+    );
+    return "skipped";
+  }
+  const timeoutMs = opts.timeoutMs ?? 1e4;
+  try {
+    const token = await oidcToken(env, timeoutMs);
+    await call(
+      `POST ${RECORD_UPLOAD_PATH}`,
+      url.replace(/\/+$/, "") + RECORD_UPLOAD_PATH,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(record)
+      },
+      timeoutMs
+    );
+    return "sent";
+  } catch (e) {
+    sink.warning(`selection record not sent: ${e.message}`);
+    return "failed";
+  }
 }
 
 // src/step/select.ts
@@ -11064,7 +11404,13 @@ async function decide(input) {
     if (problem) map = null;
   }
   const t2 = performance.now();
-  const knownTests = /* @__PURE__ */ new Set([...map?.tests.keys() ?? [], ...durations?.keys() ?? [], ...added]);
+  const alwaysRun = map ? mapAlwaysRun(map) ?? [] : [];
+  const knownTests = /* @__PURE__ */ new Set([
+    ...map?.tests.keys() ?? [],
+    ...alwaysRun,
+    ...durations?.keys() ?? [],
+    ...added
+  ]);
   const changes = changesFromGit(repo, base3, head, { knownTests });
   const t3 = performance.now();
   const allTests = knownTests;
@@ -11406,11 +11752,12 @@ if (isMainThread2) {
   const evidence = getInput(env, "evidence").toLowerCase();
   const phase = getInput(env, "phase").toLowerCase();
   try {
-    if (env.STATE_isPost === "true") runPost(env, sink);
+    if (env.STATE_isPost === "true") await sendRecord(env, sink, runPost(env, sink));
     else {
       sink.state?.("isPost", "true");
       if (phase === "select") await runSelectPhase(env, sink, { work: stepInWorker });
-      else if (phase === "outcome") runOutcomePhase(env, sink, decisionPath(env));
+      else if (phase === "outcome")
+        await sendRecord(env, sink, runOutcomePhase(env, sink, decisionPath(env)));
       else if (phase) {
         sink.warning(`input phase must be select or outcome, got ${JSON.stringify(phase)}; doing nothing`);
         process.exitCode = 1;

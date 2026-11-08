@@ -1,5 +1,5 @@
 // src/collect.ts
-import { existsSync as existsSync2, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync as existsSync2, mkdirSync, readdirSync, readFileSync, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join2, resolve as resolve2 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { parseArgs } from "node:util";
@@ -61,6 +61,35 @@ function fromV8(scripts, root, normalize = (p) => p) {
   return { loaded, fns };
 }
 
+// ../engine/src/coverage/parts.ts
+var PART_FORMAT = 2;
+var FORMAT_MARK = fnId("", `jiffy:v${PART_FORMAT}`);
+var CHILDREN_MARK = fnId("", "jiffy:children");
+function alwaysRunPath(part) {
+  return part.replace(/(\.json)?$/, ".always-run.json");
+}
+
+// src/part.ts
+import { renameSync, writeFileSync } from "node:fs";
+var FORMAT_VERSION = PART_FORMAT;
+function writeAtomic(path, data) {
+  writeFileSync(path + ".tmp", data);
+  renameSync(path + ".tmp", path);
+}
+function writePart(path, records, alwaysRun) {
+  const file = { format: "jiffy.always-run", version: FORMAT_VERSION, tests: alwaysRun };
+  writeAtomic(alwaysRunPath(path), JSON.stringify(file));
+  writeAtomic(path, JSON.stringify(records));
+}
+var TEST_FILE2 = /(^|[./])(test|spec)\.[cm]?[jt]sx?$/;
+function withMarks(fns, marks) {
+  const out = new Set(fns);
+  out.add(FORMAT_MARK);
+  if (marks.reads) out.add(READS_MARK);
+  if (marks.children) out.add(CHILDREN_MARK);
+  return [...out].sort();
+}
+
 // src/collect.ts
 function collect(dir, root) {
   const started = /* @__PURE__ */ new Map();
@@ -110,7 +139,7 @@ function collect(dir, root) {
       continue;
     }
     const loaded = /* @__PURE__ */ new Set();
-    const fns = /* @__PURE__ */ new Set([READS_MARK]);
+    const fns = /* @__PURE__ */ new Set();
     for (const p of ends) {
       const cov = fromV8(p.scripts, root);
       for (const l of cov.loaded) loaded.add(l);
@@ -125,13 +154,21 @@ function collect(dir, root) {
         }
       }
     }
-    records[t] = { loaded: [...loaded].sort(), fns: [...fns].sort() };
+    for (const p of ends)
+      for (const read of p.loaderReads ?? []) {
+        const r2 = rel(read);
+        if (r2 && r2 !== t && !TEST_FILE2.test(r2) && !loaded.has(r2)) {
+          loaded.add(r2);
+          fns.add(fnId(r2, ANY_FN));
+        }
+      }
+    records[t] = { loaded: [...loaded].sort(), fns: withMarks(fns, { reads: true, children: true }) };
   }
   return { records, unrecorded, results };
 }
-function writeAtomic(path, data) {
-  writeFileSync(path + ".tmp", data);
-  renameSync(path + ".tmp", path);
+function writeAtomic2(path, data) {
+  writeFileSync2(path + ".tmp", data);
+  renameSync2(path + ".tmp", path);
 }
 function main() {
   const { values } = parseArgs({
@@ -160,6 +197,7 @@ function main() {
     collected = collect(dir, root);
   } catch (e) {
     rmSync(coverage, { force: true });
+    rmSync(alwaysRunPath(coverage), { force: true });
     console.log(`::warning::jiffy: no node:test coverage part: ${e.message}`);
     return;
   }
@@ -173,8 +211,8 @@ function main() {
     tests: r.tests,
     skipped: r.skipped
   }));
-  writeAtomic(join2(outDir, "report-node-test.json"), JSON.stringify({ testResults }));
-  writeAtomic(coverage, JSON.stringify(records));
+  writeAtomic2(join2(outDir, "report-node-test.json"), JSON.stringify({ testResults }));
+  writePart(coverage, records, unrecorded);
   const n = Object.keys(unrecorded).length;
   console.log(
     `jiffy: recorded ${Object.keys(records).length} node:test files to ${coverage}` + (n ? `; ${n} have no record and always run` : "")
