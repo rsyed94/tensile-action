@@ -219364,12 +219364,20 @@ function parseDiff(text) {
 // ../engine/src/git.ts
 import { execFileSync, spawnSync } from "node:child_process";
 var MAX = 1 << 30;
+var deadline = null;
+function bounded() {
+  if (deadline === null) return {};
+  const left = deadline - Date.now();
+  if (left <= 0) throw new Error("git: past the deadline");
+  return { timeout: left, killSignal: "SIGKILL" };
+}
 function git(repo, args2, input) {
   return execFileSync("git", ["-C", repo, "-c", "core.quotePath=false", ...args2], {
     encoding: "utf8",
     maxBuffer: MAX,
     input,
-    stdio: ["pipe", "pipe", "pipe"]
+    stdio: ["pipe", "pipe", "pipe"],
+    ...bounded()
   });
 }
 function mergeBase(repo, a, b) {
@@ -224755,6 +224763,12 @@ var launcher = null;
 function setLauncher(l) {
   launcher = l;
 }
+function releaseDir(dir) {
+  try {
+    launcher?.release?.(dir);
+  } catch {
+  }
+}
 var active = /* @__PURE__ */ new Set();
 function killAll() {
   for (const pid of active) {
@@ -225413,7 +225427,9 @@ function tempDir(label) {
 }
 function dispose(dir) {
   return () => {
-    if (inside(realpathSync3(tmpdir2()), dir)) rmSync4(dir, { recursive: true, force: true });
+    if (!inside(realpathSync3(tmpdir2()), dir)) return;
+    releaseDir(dir);
+    rmSync4(dir, { recursive: true, force: true });
   };
 }
 function make(label, fill) {
@@ -227576,7 +227592,7 @@ function groupFiles(files, runnerOf) {
 }
 async function runGroups(ws, files, runnerOf, timeoutMs, env, opts = {}) {
   const merged = { files: /* @__PURE__ */ new Map(), timedOut: false, ms: 0, out: "" };
-  const deadline = Date.now() + timeoutMs;
+  const deadline2 = Date.now() + timeoutMs;
   const { timeoutFor, isStopped, ...runOpts } = opts;
   const stopRest = (rest) => {
     merged.timedOut = true;
@@ -227588,7 +227604,7 @@ async function runGroups(ws, files, runnerOf, timeoutMs, env, opts = {}) {
   const files_ = [...files];
   for (const g of groupFiles(files, runnerOf)) {
     if (opts.bail && [...merged.files.values()].some((o) => o.status === "failed")) break;
-    const left = deadline - Date.now();
+    const left = deadline2 - Date.now();
     if (left <= 0) {
       merged.timedOut = true;
       for (const f of g.files)
@@ -227597,7 +227613,7 @@ async function runGroups(ws, files, runnerOf, timeoutMs, env, opts = {}) {
     }
     const chunks = opts.bail ? chunk(g.files, BAIL_CHUNK) : [g.files];
     for (const files2 of chunks) {
-      const left2 = opts.bail ? timeoutFor?.(files2) ?? timeoutMs : deadline - Date.now();
+      const left2 = opts.bail ? timeoutFor?.(files2) ?? timeoutMs : deadline2 - Date.now();
       if (left2 <= 0) {
         merged.timedOut = true;
         for (const f of files2)
@@ -229208,6 +229224,17 @@ function userLauncher(user, opts = {}) {
       }
       for (const root of roots) asUser([tool("chmod"), "-R", "a=rwX", "--", root], 12e4);
       return left === false;
+    },
+    release(dir) {
+      let root;
+      try {
+        root = workspaceRoot2(dir, opts.tmp);
+      } catch {
+        return;
+      }
+      if (root !== realpathSync5(dir) || !roots.has(root)) return;
+      asUser([tool("chmod"), "-R", "a=rwX", "--", root], 12e4);
+      roots.delete(root);
     }
   };
 }

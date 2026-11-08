@@ -1,0 +1,99 @@
+name: Tensile Vitest recorder
+description: Record which functions and files each Vitest test file uses, for Tensile's test selection.
+author: Tensile
+
+# - uses: rsyed94/tensile-action/vitest@v1     # before the test step
+#   id: recorder
+#   with: { step: setup }
+# - run: npx vitest run $TENSILE_VITEST_ARGS   # your Vitest command, plus the recorder's flags
+#   env:
+#     TENSILE_VITEST_ARGS: ${{ steps.recorder.outputs.args }}
+# - uses: rsyed94/tensile-action/vitest@v1     # after it
+#   if: ${{ !cancelled() }}
+#   with: { step: collect }
+#
+# setup copies the recorder (a Vitest custom coverage provider) into <working-directory>/node_modules/.tensile-vitest,
+# where Vitest loads it natively, and outputs the flags that turn it on:
+#   --coverage.enabled=true --coverage.provider=custom --coverage.customProviderModule=<that dir>/provider.mjs
+# An npm script takes them after `--` (npm test -- $TENSILE_VITEST_ARGS); pnpm and yarn pass them on as they are.
+# They replace the run's coverage provider, so record in a run whose coverage report nothing else needs.
+# When setup can't record, args is empty and the test step runs unchanged. The test run writes
+# <out-dir>/coverage-vitest.json (coverage part format 2); collect checks it. Vitest 3 or later, Linux and macOS.
+
+inputs:
+  step:
+    description: setup (before the tests) or collect (after them).
+    required: true
+  working-directory:
+    description: Where Vitest runs (the directory with its config and node_modules).
+    required: false
+    default: '.'
+  root:
+    description: Repository root that records are relative to.
+    required: false
+    default: ''
+  out-dir:
+    description: Where the test run writes coverage-vitest.json, relative to the workspace.
+    required: false
+    default: .jiffy
+
+outputs:
+  args:
+    description: The Vitest flags that turn the recorder on (empty when it can't record).
+    value: ${{ steps.setup.outputs.args }}
+
+runs:
+  using: composite
+  steps:
+    - name: Tensile Vitest setup
+      id: setup
+      if: inputs.step == 'setup'
+      shell: bash
+      env:
+        ROOT: ${{ inputs.root || github.workspace }}
+        WORKDIR: ${{ inputs.working-directory }}
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        set -euo pipefail
+        echo "args=" >> "$GITHUB_OUTPUT"
+        if ! ROOT=$(cd "$ROOT" 2>/dev/null && pwd -P); then
+          echo "::warning::tensile: root $ROOT doesn't exist; not recording"; exit 0
+        fi
+        if ! WORKDIR=$(cd "$WORKDIR" 2>/dev/null && pwd -P); then
+          echo "::warning::tensile: working-directory $WORKDIR doesn't exist; not recording"; exit 0
+        fi
+        case "$OUT_DIR" in /*) ;; *) OUT_DIR="$GITHUB_WORKSPACE/$OUT_DIR";; esac
+        dest="$WORKDIR/node_modules/.tensile-vitest"
+        # The flags are split on spaces by the shell that runs the test command.
+        case "$dest$OUT_DIR" in *[[:space:]\"\'\\]*)
+          echo "::warning::tensile: the working directory or out-dir has spaces or quotes; not recording"; exit 0;;
+        esac
+        rm -rf "$dest" && mkdir -p "$dest"
+        cp "$GITHUB_ACTION_PATH/provider.mjs" "$GITHUB_ACTION_PATH/preload.mjs" "$GITHUB_ACTION_PATH/package.json" "$dest/"
+        mkdir -p "$OUT_DIR"
+        rm -f "$OUT_DIR/coverage-vitest.json" "$OUT_DIR/coverage-vitest.always-run.json"
+        {
+          echo "JIFFY_ROOT=$ROOT"
+          echo "JIFFY_OUT=$OUT_DIR/coverage-vitest.json"
+          echo "TENSILE_VITEST_OUT=$OUT_DIR/coverage-vitest.json"
+        } >> "$GITHUB_ENV"
+        echo "args=--coverage.enabled=true --coverage.provider=custom --coverage.customProviderModule=$dest/provider.mjs" >> "$GITHUB_OUTPUT"
+    - name: Tensile Vitest collect
+      if: inputs.step == 'collect'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -n "${TENSILE_VITEST_OUT:-}" ]; then
+          if [ -s "$TENSILE_VITEST_OUT" ]; then
+            echo "tensile: recorded $TENSILE_VITEST_OUT"
+          else
+            echo "::warning::tensile: no Vitest coverage was recorded; pass the setup step's args output to Vitest"
+          fi
+          { echo "JIFFY_OUT="; echo "TENSILE_VITEST_OUT="; } >> "$GITHUB_ENV"
+        fi
+    - name: Unknown step
+      if: inputs.step != 'setup' && inputs.step != 'collect'
+      shell: bash
+      run: |
+        echo "::error::tensile vitest: step must be setup or collect"
+        exit 1

@@ -12,7 +12,9 @@ full suite), records evidence for Tensile's shadow reports, and uploads results 
     runner: vitest # vitest | jest | node-test | pytest
 ```
 
-The node:test coverage recorder is at `rsyed94/tensile-action/node-test@v1`.
+The coverage recorders, which teach selection which tests use which code, are beside it:
+`rsyed94/tensile-action/vitest@v1`, `rsyed94/tensile-action/jest@v1` and `rsyed94/tensile-action/node-test@v1`.
+For pytest, install `pytest-tensile` from PyPI.
 
 **Docs:** https://jiffy-app-production.up.railway.app/docs/install
 
@@ -22,7 +24,8 @@ The node:test coverage recorder is at `rsyed94/tensile-action/node-test@v1`.
 - `v1.2.3` tags never move. Pin one, or its commit, for a fixed version.
 
 Each release is one commit here, built from a tagged commit of the Tensile source, checked (every runtime file
-present, no secrets, no build-machine paths) and smoke-run before it is published. This repository contains only
-the compiled action and is published automatically; it isn't the place for issues or changes.
+present, no secrets, no build-machine paths) and smoke-run, each recorder around a real test run, before it is
+published. This repository contains only the compiled action and is published automatically; it isn't the place
+for issues or changes.
 
 Bundled third-party components keep their own licenses (see `dist/*.LICENSE`).

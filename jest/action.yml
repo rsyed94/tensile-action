@@ -1,0 +1,134 @@
+name: Tensile Jest recorder
+description: Record which functions and files each Jest test file uses, for Tensile's test selection.
+author: Tensile
+
+# - uses: rsyed94/tensile-action/jest@v1       # before the test step
+#   id: recorder
+#   with: { step: setup }                      # config: path/to/jest.config.js when it isn't jest.config.* there
+# - run: npx jest $TENSILE_JEST_ARGS           # your Jest command, plus --config <the wrapped config>
+#   env:
+#     TENSILE_JEST_ARGS: ${{ steps.recorder.outputs.args }}
+# - uses: rsyed94/tensile-action/jest@v1       # after it
+#   if: ${{ !cancelled() }}
+#   with: { step: collect }
+#
+# setup copies the recorder into <working-directory>/node_modules/.tensile-jest and writes tensile.jest.config.mjs
+# beside your Jest config: your config, plus the recorder's setup files and reporter (your reporters stay). args is
+# `--config=<that file>`. A test command that already names its config (or runs Jest through Nx or Turborepo) takes
+# `in-place: true` instead: setup moves the config to <name>.tensile-original<ext>, writes the wrapper under the
+# original name so the unchanged command loads it. collect puts the original back and removes the wrapper, so run it
+# with `if: !cancelled()`. Run setup after your install step (the recorder lives in node_modules). A config that takes
+# its reporters from a preset isn't recorded: the wrapper would drop them.
+# setup loads the wrapped config before the tests; if that fails, it records nothing and the test step runs
+# unchanged (args empty, the config untouched). The test run writes <out-dir>/coverage-jest.json (coverage part
+# format 2). Jest 27 or later, Linux and macOS.
+
+inputs:
+  step:
+    description: setup (before the tests) or collect (after them).
+    required: true
+  working-directory:
+    description: Where Jest runs (the directory with its config and node_modules).
+    required: false
+    default: '.'
+  config:
+    description: The Jest config, relative to working-directory. Default jest.config.{js,mjs,cjs,ts,mts,cts} there.
+    required: false
+    default: ''
+  in-place:
+    description: true to wrap the config under its own name, for a test command that can't take --config.
+    required: false
+    default: 'false'
+  root:
+    description: Repository root that records are relative to.
+    required: false
+    default: ''
+  out-dir:
+    description: Where the test run writes coverage-jest.json, relative to the workspace.
+    required: false
+    default: .jiffy
+
+outputs:
+  args:
+    description: The Jest flags that turn the recorder on (empty with in-place, or when it can't record).
+    value: ${{ steps.setup.outputs.args }}
+  config:
+    description: The wrapped config's path (empty when it can't record).
+    value: ${{ steps.setup.outputs.config }}
+
+runs:
+  using: composite
+  steps:
+    - name: Tensile Jest setup
+      id: setup
+      if: inputs.step == 'setup'
+      shell: bash
+      env:
+        ROOT: ${{ inputs.root || github.workspace }}
+        WORKDIR: ${{ inputs.working-directory }}
+        CONFIG: ${{ inputs.config }}
+        IN_PLACE: ${{ inputs.in-place }}
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        set -euo pipefail
+        { echo "args="; echo "config="; } >> "$GITHUB_OUTPUT"
+        if ! ROOT=$(cd "$ROOT" 2>/dev/null && pwd -P); then
+          echo "::warning::tensile: root $ROOT doesn't exist; not recording"; exit 0
+        fi
+        if ! WORKDIR=$(cd "$WORKDIR" 2>/dev/null && pwd -P); then
+          echo "::warning::tensile: working-directory $WORKDIR doesn't exist; not recording"; exit 0
+        fi
+        if [ -z "$CONFIG" ]; then
+          for f in jest.config.js jest.config.mjs jest.config.cjs jest.config.ts jest.config.mts jest.config.cts; do
+            if [ -f "$WORKDIR/$f" ]; then CONFIG=$f; break; fi
+          done
+          [ -n "$CONFIG" ] || { echo "::warning::tensile: no jest.config.* in $WORKDIR; set the config input. Not recording"; exit 0; }
+        fi
+        case "$CONFIG" in /*) ;; *) CONFIG="$WORKDIR/$CONFIG";; esac
+        case "$OUT_DIR" in /*) ;; *) OUT_DIR="$GITHUB_WORKSPACE/$OUT_DIR";; esac
+        dest="$WORKDIR/node_modules/.tensile-jest"
+        # The flag is split on spaces by the shell that runs the test command, and NODE_OPTIONS carries the preload.
+        case "$dest$CONFIG$OUT_DIR" in *[[:space:]\"\'\\]*)
+          echo "::warning::tensile: a path has spaces or quotes; not recording"; exit 0;;
+        esac
+        rm -rf "$dest" && mkdir -p "$dest"
+        for f in reporter.mjs preload.mjs setup.cjs begin.cjs package.json; do cp "$GITHUB_ACTION_PATH/$f" "$dest/"; done
+        mkdir -p "$OUT_DIR"
+        rm -f "$OUT_DIR/coverage-jest.json" "$OUT_DIR/coverage-jest.always-run.json"
+        # Before wrapping: whatever happens next, collect puts the config back.
+        echo "TENSILE_JEST_RESTORE=$CONFIG" >> "$GITHUB_ENV"
+        flags=()
+        [ "$IN_PLACE" = true ] && flags=(--in-place)
+        if ! wrapped=$(cd "$WORKDIR" && node "$GITHUB_ACTION_PATH/wrap-config.mjs" --recorder "$dest" --config "$CONFIG" ${flags[@]+"${flags[@]}"}); then
+          echo "::warning::tensile: couldn't wrap the Jest config $CONFIG; not recording"; exit 0
+        fi
+        {
+          echo "JIFFY_ROOT=$ROOT"
+          echo "JIFFY_OUT=$OUT_DIR/coverage-jest.json"
+          echo "TENSILE_JEST_OUT=$OUT_DIR/coverage-jest.json"
+        } >> "$GITHUB_ENV"
+        echo "config=$wrapped" >> "$GITHUB_OUTPUT"
+        if [ "$IN_PLACE" != true ]; then echo "args=--config=$wrapped" >> "$GITHUB_OUTPUT"; fi
+    - name: Tensile Jest collect
+      if: inputs.step == 'collect'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -n "${TENSILE_JEST_RESTORE:-}" ]; then
+          node "$GITHUB_ACTION_PATH/wrap-config.mjs" --restore --config "$TENSILE_JEST_RESTORE" ||
+            echo "::warning::tensile: couldn't put the original Jest config back at $TENSILE_JEST_RESTORE"
+        fi
+        if [ -n "${TENSILE_JEST_OUT:-}" ]; then
+          if [ -s "$TENSILE_JEST_OUT" ]; then
+            echo "tensile: recorded $TENSILE_JEST_OUT"
+          else
+            echo "::warning::tensile: no Jest coverage was recorded; run Jest with the setup step's args output"
+          fi
+        fi
+        { echo "JIFFY_OUT="; echo "TENSILE_JEST_OUT="; echo "TENSILE_JEST_RESTORE="; } >> "$GITHUB_ENV"
+    - name: Unknown step
+      if: inputs.step != 'setup' && inputs.step != 'collect'
+      shell: bash
+      run: |
+        echo "::error::tensile jest: step must be setup or collect"
+        exit 1

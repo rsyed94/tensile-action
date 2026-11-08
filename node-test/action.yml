@@ -51,6 +51,8 @@ runs:
         if ! ROOT=$(cd "$ROOT" 2>/dev/null && pwd); then
           echo "::warning::jiffy: root $ROOT doesn't exist; not recording"; exit 0
         fi
+        # Windows runners hand bash a C:\... path; Node takes forward slashes there, and NODE_OPTIONS can carry those.
+        GITHUB_ACTION_PATH=${GITHUB_ACTION_PATH//\\//}
         case "$GITHUB_ACTION_PATH" in *[[:space:]\"\'\\]*)
           echo "::warning::jiffy: the action path has spaces or quotes, which NODE_OPTIONS can't carry; not recording"; exit 0;;
         esac

@@ -143,273 +143,6 @@ function sampleSize(rate, n) {
   return rate > 0 && n > 0 ? Math.min(n, Math.max(1, Math.ceil(rate * n))) : 0;
 }
 
-// src/inputs.ts
-var InputError = class extends Error {
-};
-var FALSE = /* @__PURE__ */ new Set(["false", "0", "no", "off", ""]);
-function parseNumber(name2, raw2, dflt, { min, max = Infinity, integer }) {
-  if (!raw2) return dflt;
-  const n = Number(raw2);
-  if (!Number.isFinite(n) || n < min || n > max || integer && !Number.isInteger(n))
-    throw new InputError(
-      `input ${name2} must be ${integer ? "an integer" : "a number"} >= ${min}${max < Infinity ? ` and <= ${max}` : ""}, got ${raw2}`
-    );
-  return n;
-}
-function killSwitch(env) {
-  const vals = [getInput(env, "run-all"), (env.JIFFY_RUN_ALL ?? "").trim()];
-  return vals.some((v) => !FALSE.has(v.toLowerCase()));
-}
-function parseSampleRate(raw2) {
-  if (!raw2) return 0.05;
-  try {
-    return parseRate(raw2);
-  } catch (e) {
-    throw new InputError(`input sample-rate ${e.message}`);
-  }
-}
-function parseServiceUrl(raw2) {
-  if (!raw2) return "";
-  let u;
-  try {
-    u = new URL(raw2);
-  } catch {
-    throw new InputError(`input service-url is not a URL: ${raw2}`);
-  }
-  const local = ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
-  if (u.protocol !== "https:" && !(u.protocol === "http:" && local))
-    throw new InputError(`input service-url must be https, got ${raw2}`);
-  return raw2;
-}
-function parseInputs(env) {
-  const mode = getInput(env, "mode") || "report";
-  if (mode !== "report" && mode !== "enforce")
-    throw new InputError(`input mode must be report or enforce, got ${JSON.stringify(mode)}`);
-  return {
-    map: getInput(env, "map"),
-    base: getInput(env, "base"),
-    durations: getInput(env, "durations"),
-    mode,
-    matrix: getInput(env, "matrix"),
-    shards: parseNumber("shards", getInput(env, "shards"), 1, { min: 1, max: 256, integer: true }),
-    killSwitch: killSwitch(env),
-    maxMapAgeDays: parseNumber("max-map-age-days", getInput(env, "max-map-age-days"), 14, { min: 0 }),
-    timeoutSeconds: parseNumber("timeout-seconds", getInput(env, "timeout-seconds"), 60, { min: 1 }),
-    workingDirectory: getInput(env, "working-directory") || env.GITHUB_WORKSPACE || ".",
-    sampleRate: parseSampleRate(getInput(env, "sample-rate")),
-    serviceUrl: parseServiceUrl(getInput(env, "service-url")),
-    quarantine: getInput(env, "quarantine"),
-    always: getInput(env, "always").split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
-  };
-}
-
-// src/matrix.ts
-var same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-function parseMatrix(text) {
-  const m = JSON.parse(text);
-  if (!m || typeof m !== "object" || Array.isArray(m)) throw new Error("matrix must be a JSON object");
-  for (const [k, v] of Object.entries(m))
-    if (!Array.isArray(v)) throw new Error(`matrix.${k} must be an array`);
-  return m;
-}
-function expandMatrix(m) {
-  const axes = Object.entries(m).filter(([k]) => k !== "include" && k !== "exclude");
-  let combos = axes.length ? [{}] : [];
-  for (const [k, vs] of axes) combos = combos.flatMap((c) => vs.map((v) => ({ ...c, [k]: v })));
-  const excludes = m.exclude ?? [];
-  combos = combos.filter((c) => !excludes.some((e) => Object.entries(e).every(([k, v]) => same(c[k], v))));
-  const axisNames = new Set(axes.map(([k]) => k));
-  const originals = combos.map((c) => ({ ...c }));
-  for (const inc of m.include ?? []) {
-    let matched = false;
-    originals.forEach((orig, i2) => {
-      if (Object.entries(inc).every(([k, v]) => !axisNames.has(k) || same(orig[k], v))) {
-        Object.assign(combos[i2], inc);
-        matched = true;
-      }
-    });
-    if (!matched) combos.push({ ...inc });
-  }
-  return combos;
-}
-var LINUX = /ubuntu|linux/i;
-function pruneMatrix(m) {
-  const combos = expandMatrix(m);
-  if (!combos.length) throw new Error("matrix has no combinations");
-  const kept = combos.find((c) => Object.values(c).some((v) => typeof v === "string" && LINUX.test(v))) ?? combos[0];
-  const matrix = Object.fromEntries(Object.entries(kept).map(([k, v]) => [k, [v]]));
-  return { matrix, kept, total: combos.length };
-}
-
-// src/protocol.ts
-var OIDC_AUDIENCE = "jiffy";
-var SERVICE_TIMEOUT_MS = 5e3;
-var PROTOCOL_VERSION = 1;
-var seg = encodeURIComponent;
-var servicePaths = {
-  /**
-   * GET: 200 with the newest binary coverage map (`application/octet-stream`, encodeMap format) recorded at
-   * or before commit `before` on the default branch; 404 when there is none.
-   */
-  map: (owner, repo, before) => `/v1/maps/${seg(owner)}/${seg(repo)}?before=${seg(before)}`,
-  /**
-   * GET (the ledger, docs/spec/ledger.md §3.3): 200 with the newest *signed* map at or before `before` and its claims
-   * and signature in headers (MAP_CLAIMS_HEADER, MAP_SIGNATURE_HEADER); 404 when there is none. The in-job step reads
-   * maps only from here.
-   */
-  ledgerMap: (owner, repo, before) => `/v1/ledger/maps/${seg(owner)}/${seg(repo)}?before=${seg(before)}`,
-  /** GET: 200 with a RepoConfig. */
-  config: (owner, repo) => `/v1/repos/${seg(owner)}/${seg(repo)}/config`,
-  /** GET: 200 with a QuarantineList (@jiffy/flaky/state): flaky tests kept out of the fast check (R13). */
-  quarantine: (owner, repo) => `/v1/repos/${seg(owner)}/${seg(repo)}/quarantine`,
-  /** POST a DecisionPayload: any 2xx (body optional, DecisionAck when present). */
-  decisions: "/v1/decisions"
-};
-var MAP_CLAIMS_HEADER = "x-tensile-map-claims";
-var MAP_SIGNATURE_HEADER = "x-tensile-map-signature";
-var MAX_TRIGGERS = 50;
-var EVIDENCE_PATH = "/v1/evidence";
-var EVIDENCE_MAX_BYTES = 5 * 1024 * 1024;
-var EVIDENCE_PREFIX = "jiffy-evidence-";
-var PLACEHOLDER_SUBJECT = "evidence-step-unfinished";
-
-// src/quarantine.ts
-import { readFileSync as readFileSync2 } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
-
-// ../flaky/src/state.ts
-var STATE_VERSION = 1;
-var isStr = (x) => typeof x === "string";
-function parseQuarantine(json) {
-  const o = json;
-  if (!o || typeof o !== "object") throw new Error("quarantine must be a JSON object");
-  if (o.version !== STATE_VERSION) throw new Error(`unsupported quarantine version ${String(o.version)}`);
-  const entries = Array.isArray(o.tests) ? o.tests : o.quarantine && typeof o.quarantine === "object" ? Object.values(o.quarantine) : null;
-  if (!entries) throw new Error("quarantine has neither tests[] nor quarantine{}");
-  for (const e of entries)
-    if (!e || !isStr(e.test) || !isStr(e.file) || !e.file || !isStr(e.reason))
-      throw new Error(`malformed quarantine entry ${JSON.stringify(e)}`);
-  return { version: STATE_VERSION, tests: entries };
-}
-
-// src/http.ts
-var ServiceError = class extends Error {
-  /** HTTP status, when the server answered. */
-  status;
-  constructor(message, status) {
-    super(message);
-    this.status = status;
-  }
-};
-async function call(what, url, init2, timeoutMs) {
-  let res;
-  try {
-    res = await fetch(url, { ...init2, signal: AbortSignal.timeout(timeoutMs) });
-  } catch (e) {
-    const err2 = e;
-    const why = err2.name === "TimeoutError" ? `timed out after ${timeoutMs / 1e3} s` : err2.message;
-    throw new ServiceError(`${what}: ${why}`);
-  }
-  if (!res.ok) throw new ServiceError(`${what}: HTTP ${res.status}`, res.status);
-  return res;
-}
-async function oidcToken(env, timeoutMs) {
-  const reqUrl = env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  const reqToken = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-  if (!reqUrl || !reqToken)
-    throw new ServiceError("no OIDC token: the job needs `permissions: id-token: write`");
-  const u = new URL(reqUrl);
-  u.searchParams.set("audience", OIDC_AUDIENCE);
-  const res = await call(
-    "OIDC token request",
-    u.href,
-    { headers: { Authorization: `Bearer ${reqToken}`, Accept: "application/json" } },
-    timeoutMs
-  );
-  const body2 = await res.json().catch(() => null);
-  const token = body2?.value;
-  if (typeof token !== "string" || !/^[\w.~+/=-]+$/.test(token))
-    throw new ServiceError("OIDC token request: no token");
-  process.stdout.write(`::add-mask::${token}
-`);
-  return token;
-}
-
-// src/service.ts
-var base = (t) => t.url.replace(/\/+$/, "");
-var auth = (token) => ({ Authorization: `Bearer ${token}` });
-async function fetchConfig(t, token) {
-  const path = servicePaths.config(t.owner, t.repo);
-  const res = await call(`GET ${path}`, base(t) + path, { headers: auth(token) }, t.timeoutMs);
-  const cfg = await res.json().catch(() => null);
-  if (!cfg || typeof cfg.runAll !== "boolean") throw new ServiceError(`GET ${path}: malformed config`);
-  if (cfg.mode !== void 0 && cfg.mode !== "report" && cfg.mode !== "enforce")
-    throw new ServiceError(`GET ${path}: unknown mode ${JSON.stringify(cfg.mode)}`);
-  if (cfg.selectionEnforce !== void 0 && (!Array.isArray(cfg.selectionEnforce) || cfg.selectionEnforce.some((k) => typeof k !== "string")))
-    throw new ServiceError(`GET ${path}: selectionEnforce must be a list of strings`);
-  const l = cfg.ledger;
-  if (l !== void 0 && (!l || typeof l.stale !== "boolean" || typeof l.complete !== "boolean" || typeof l.lagMs !== "number" || !Array.isArray(l.reasons)))
-    throw new ServiceError(`GET ${path}: malformed ledger freshness`);
-  return cfg;
-}
-async function fetchQuarantine(t, token) {
-  const path = servicePaths.quarantine(t.owner, t.repo);
-  const res = await call(`GET ${path}`, base(t) + path, { headers: auth(token) }, t.timeoutMs);
-  try {
-    return parseQuarantine(await res.json());
-  } catch (e) {
-    throw new ServiceError(`GET ${path}: ${e.message}`);
-  }
-}
-async function fetchMap(t, token, before) {
-  const path = servicePaths.map(t.owner, t.repo, before);
-  const res = await call(`GET ${path}`, base(t) + path, { headers: auth(token) }, t.timeoutMs);
-  return Buffer.from(await res.arrayBuffer());
-}
-async function fetchSignedMap(t, token, before) {
-  const path = servicePaths.ledgerMap(t.owner, t.repo, before);
-  const res = await call(`GET ${path}`, base(t) + path, { headers: auth(token) }, t.timeoutMs);
-  const claims = res.headers.get(MAP_CLAIMS_HEADER);
-  const signature = res.headers.get(MAP_SIGNATURE_HEADER);
-  const bytes = Buffer.from(await res.arrayBuffer());
-  const offered = claims !== null || signature !== null;
-  if (!claims || !signature || claims.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(claims))
-    return { bytes, signed: null, offered };
-  return { bytes, signed: { claims: Buffer.from(claims, "base64url").toString("utf8"), signature }, offered };
-}
-async function postDecision(t, token, d) {
-  const path = servicePaths.decisions;
-  const res = await call(
-    `POST ${path}`,
-    base(t) + path,
-    {
-      method: "POST",
-      headers: { ...auth(token), "Content-Type": "application/json" },
-      body: JSON.stringify(d)
-    },
-    t.timeoutMs
-  );
-  await res.arrayBuffer();
-}
-
-// src/quarantine.ts
-async function loadQuarantine(opts) {
-  const entries = [];
-  if (opts.file) {
-    const p = isAbsolute(opts.file) ? opts.file : resolve(opts.cwd, opts.file);
-    let json;
-    try {
-      json = JSON.parse(readFileSync2(p, "utf8"));
-    } catch (e) {
-      throw new Error(`cannot read ${opts.file}: ${e.message}`);
-    }
-    entries.push(...parseQuarantine(json).tests);
-  }
-  if (opts.service) entries.push(...(await fetchQuarantine(opts.service.target, opts.service.token)).tests);
-  return entries;
-}
-var quarantinedFiles = (entries) => [...new Set(entries.map((e) => e.file))].sort();
-
 // ../engine/src/classify.ts
 var RUN_ALL_KINDS = /* @__PURE__ */ new Set([
   "lockfile",
@@ -422,7 +155,7 @@ var TEST_FILE = /(^|[./])(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\
 var SOURCE_FILE = /\.([cm]?[jt]sx?|py)$/;
 var SNAPSHOT = /(^|\/)__snapshots__\/([^/]+)\.snap$/;
 var SYRUPY = /(^|\/)__snapshots__\/((?:test_[^/]+|[^/]+_test))(?:\.ambr|\/[^/]+)$/;
-var base2 = (p) => p.slice(p.lastIndexOf("/") + 1);
+var base = (p) => p.slice(p.lastIndexOf("/") + 1);
 var LOCKFILES = /* @__PURE__ */ new Set([
   "package-lock.json",
   "npm-shrinkwrap.json",
@@ -491,7 +224,7 @@ var CI = [
   /^azure-pipelines\.yml$/
 ];
 function classify(path, opts = {}) {
-  const name2 = base2(path);
+  const name2 = base(path);
   if (opts.knownTests?.has(path)) return "test";
   if (LOCKFILES.has(name2)) return "lockfile";
   if (MANIFESTS.has(name2)) return "manifest";
@@ -602,12 +335,23 @@ function changedLines(f) {
 // ../engine/src/git.ts
 import { execFileSync, spawnSync } from "node:child_process";
 var MAX = 1 << 30;
+var deadline = null;
+function setGitDeadline(at) {
+  deadline = at;
+}
+function bounded() {
+  if (deadline === null) return {};
+  const left = deadline - Date.now();
+  if (left <= 0) throw new Error("git: past the deadline");
+  return { timeout: left, killSignal: "SIGKILL" };
+}
 function git(repo, args2, input) {
   return execFileSync("git", ["-C", repo, "-c", "core.quotePath=false", ...args2], {
     encoding: "utf8",
     maxBuffer: MAX,
     input,
-    stdio: ["pipe", "pipe", "pipe"]
+    stdio: ["pipe", "pipe", "pipe"],
+    ...bounded()
   });
 }
 function mergeBase(repo, a, b) {
@@ -622,13 +366,11 @@ var promisors = /* @__PURE__ */ new Map();
 function promisorRemote(repo) {
   let r = promisors.get(repo);
   if (r === void 0) {
-    const res = spawnSync("git", [
-      "-C",
-      repo,
-      "config",
-      "--get-regexp",
-      "^(remote\\..*\\.promisor|extensions\\.partialclone)$"
-    ]);
+    const res = spawnSync(
+      "git",
+      ["-C", repo, "config", "--get-regexp", "^(remote\\..*\\.promisor|extensions\\.partialclone)$"],
+      bounded()
+    );
     r = null;
     for (const l of res.status === 0 ? res.stdout.toString().split("\n") : []) {
       const m = /^remote\.(.+)\.promisor true$/.exec(l) ?? /^extensions\.partialclone (.+)$/.exec(l);
@@ -648,7 +390,8 @@ function prefetchBlobs(repo, specs) {
   const check = spawnSync("git", ["-C", repo, "cat-file", "--batch-check"], {
     input: oids.join("\n") + "\n",
     maxBuffer: MAX,
-    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" }
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+    ...bounded()
   });
   if (check.status !== 0) return;
   const missing = check.stdout.toString().split("\n").filter((l) => l.endsWith(" missing")).map((l) => l.slice(0, -" missing".length));
@@ -669,7 +412,7 @@ function prefetchBlobs(repo, specs) {
       "--filter=blob:none",
       "--stdin"
     ],
-    { input: missing.join("\n") + "\n", maxBuffer: MAX }
+    { input: missing.join("\n") + "\n", maxBuffer: MAX, ...bounded() }
   );
 }
 function readBlobs(repo, specs) {
@@ -678,7 +421,8 @@ function readBlobs(repo, specs) {
   prefetchBlobs(repo, specs);
   const res = spawnSync("git", ["-C", repo, "cat-file", "--batch"], {
     input: specs.join("\n") + "\n",
-    maxBuffer: MAX
+    maxBuffer: MAX,
+    ...bounded()
   });
   if (res.status !== 0) throw new Error(`git cat-file failed: ${res.stderr.toString()}`);
   const buf = res.stdout;
@@ -2739,13 +2483,13 @@ async function Module2(moduleArg = {}) {
       }
       readAsync = /* @__PURE__ */ __name(async (url) => {
         if (isFileURI(url)) {
-          return new Promise((resolve7, reject) => {
+          return new Promise((resolve8, reject) => {
             var xhr = new XMLHttpRequest();
             xhr.open("GET", url, true);
             xhr.responseType = "arraybuffer";
             xhr.onload = () => {
               if (xhr.status == 200 || xhr.status == 0 && xhr.response) {
-                resolve7(xhr.response);
+                resolve8(xhr.response);
                 return;
               }
               reject(xhr.status);
@@ -2941,9 +2685,9 @@ async function Module2(moduleArg = {}) {
     __name(receiveInstantiationResult, "receiveInstantiationResult");
     var info2 = getWasmImports();
     if (Module["instantiateWasm"]) {
-      return new Promise((resolve7, reject) => {
+      return new Promise((resolve8, reject) => {
         Module["instantiateWasm"](info2, (mod, inst) => {
-          resolve7(receiveInstance(mod, inst));
+          resolve8(receiveInstance(mod, inst));
         });
       });
     }
@@ -3805,7 +3549,7 @@ async function Module2(moduleArg = {}) {
   _fd_close.sig = "ii";
   var INT53_MAX = 9007199254740992;
   var INT53_MIN = -9007199254740992;
-  var bigintToI53Checked = /* @__PURE__ */ __name((num2) => num2 < INT53_MIN || num2 > INT53_MAX ? NaN : Number(num2), "bigintToI53Checked");
+  var bigintToI53Checked = /* @__PURE__ */ __name((num3) => num3 < INT53_MIN || num3 > INT53_MAX ? NaN : Number(num3), "bigintToI53Checked");
   function _fd_seek(fd, offset, whence, newOffset) {
     offset = bigintToI53Checked(offset);
     return 70;
@@ -3823,7 +3567,7 @@ async function Module2(moduleArg = {}) {
     }
   }, "printChar");
   var _fd_write = /* @__PURE__ */ __name((fd, iov, iovcnt, pnum) => {
-    var num2 = 0;
+    var num3 = 0;
     for (var i2 = 0; i2 < iovcnt; i2++) {
       var ptr = LE_HEAP_LOAD_U32((iov >> 2) * 4);
       var len = LE_HEAP_LOAD_U32((iov + 4 >> 2) * 4);
@@ -3831,9 +3575,9 @@ async function Module2(moduleArg = {}) {
       for (var j = 0; j < len; j++) {
         printChar(fd, HEAPU8[ptr + j]);
       }
-      num2 += len;
+      num3 += len;
     }
-    LE_HEAP_STORE_U32((pnum >> 2) * 4, num2);
+    LE_HEAP_STORE_U32((pnum >> 2) * 4, num3);
     return 0;
   }, "_fd_write");
   _fd_write.sig = "iippp";
@@ -4276,8 +4020,8 @@ async function Module2(moduleArg = {}) {
   if (runtimeInitialized) {
     moduleRtn = Module;
   } else {
-    moduleRtn = new Promise((resolve7, reject) => {
-      readyPromiseResolve = resolve7;
+    moduleRtn = new Promise((resolve8, reject) => {
+      readyPromiseResolve = resolve8;
       readyPromiseReject = reject;
     });
   }
@@ -5651,7 +5395,7 @@ import { createRequire as createRequire3 } from "node:module";
 // ../../node_modules/.pnpm/oxc-parser@0.157.0/node_modules/oxc-parser/src-js/bindings.js
 import { createRequire as createRequire2 } from "module";
 var require2 = createRequire2(import.meta.url);
-var { readFileSync: readFileSync3 } = require2("fs");
+var { readFileSync: readFileSync2 } = require2("fs");
 var nativeBinding = null;
 var __napiLoadedBindingTarget = "native";
 var loadErrors = [];
@@ -5671,7 +5415,7 @@ var isMusl = () => {
 var isFileMusl = (f) => f.includes("libc.musl-") || f.includes("ld-musl-");
 var isMuslFromFilesystem = () => {
   try {
-    return readFileSync3("/usr/bin/ldd", "utf-8").includes("musl");
+    return readFileSync2("/usr/bin/ldd", "utf-8").includes("musl");
   } catch {
     return null;
   }
@@ -6799,8 +6543,8 @@ function tsSpans(path, source) {
   const chars = source.split("");
   for (const c of r.comments) for (let i2 = c.start; i2 < c.end; i2++) if (chars[i2] !== "\n") chars[i2] = " ";
   const blankLines = /* @__PURE__ */ new Set();
-  const lines3 = chars.join("").split("\n");
-  lines3.forEach((l, i2) => {
+  const lines4 = chars.join("").split("\n");
+  lines4.forEach((l, i2) => {
     if (!l.trim()) blankLines.add(i2 + 1);
   });
   const spans = {
@@ -6810,7 +6554,7 @@ function tsSpans(path, source) {
     reexportRanges,
     bindings,
     blankLines,
-    lineCount: lines3.length
+    lineCount: lines4.length
   };
   return { ok: true, spans };
 }
@@ -7314,7 +7058,7 @@ var QUOTES = `'"\``;
 var PY_IMPORT = /^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n#]*(?:\\\n[^\n#]*)*)|import[ \t]+([^\n#;]+))/gm;
 var pyImportCache = /* @__PURE__ */ new Map();
 var pyIndexes = /* @__PURE__ */ new WeakMap();
-function pyIndex(tree, files, resolve7) {
+function pyIndex(tree, files, resolve8) {
   let index = pyIndexes.get(tree);
   if (index) return index;
   index = /* @__PURE__ */ new Map();
@@ -7322,7 +7066,7 @@ function pyIndex(tree, files, resolve7) {
     const src = tree.read(p);
     if (!src) continue;
     for (const m of pyImportedModules(src, tree.id?.(p))) {
-      const r = resolve7(p, m);
+      const r = resolve8(p, m);
       if (!Array.isArray(r)) continue;
       for (const t of r) {
         let s = index.get(t);
@@ -7413,7 +7157,7 @@ function resolveReferences(seeds, ctx) {
   };
   const parsedPaths = /* @__PURE__ */ new Set();
   const { tree } = ctx;
-  const resolve7 = () => resolverFor(ctx);
+  const resolve8 = () => resolverFor(ctx);
   const exportedSeen = /* @__PURE__ */ new Map();
   let loadersDone = { js: false, py: false };
   const refsOf = (path) => {
@@ -7473,7 +7217,7 @@ function resolveReferences(seeds, ctx) {
     return hit;
   };
   const namedByString = (path) => {
-    const parts2 = resolve7().pyModuleName(path).split(".");
+    const parts2 = resolve8().pyModuleName(path).split(".");
     const names2 = parts2.map((_, i2) => parts2.slice(i2).join(".")).filter((n) => n.includes("."));
     if (!names2.length) return null;
     for (const p of sourcesOf("py")) {
@@ -7485,7 +7229,7 @@ function resolveReferences(seeds, ctx) {
   };
   const importersOf = (path, exported) => isPy(path) ? pyImportersOf(path) : jsImportersOf(path, exported);
   const pyImportersOf = (path) => {
-    const index = pyIndex(tree, sourcesOf("py"), (p, m) => resolve7().py(p, m));
+    const index = pyIndex(tree, sourcesOf("py"), (p, m) => resolve8().py(p, m));
     const cands = new Set(index.get(path) ?? []);
     const needles = stems(path);
     for (const p of sourcesOf("py")) {
@@ -7507,7 +7251,7 @@ function resolveReferences(seeds, ctx) {
   };
   const jsImportersOf = (path, exported) => {
     const lang = "js";
-    const needles = [...stems(path), ...resolve7().packageNamesFor(path), ...resolve7().aliasNeedles(path)];
+    const needles = [...stems(path), ...resolve8().packageNamesFor(path), ...resolve8().aliasNeedles(path)];
     const named = [...exported].filter((e) => e !== "default" && e !== "*");
     const anyName = exported.has("default") || exported.has("*");
     const out2 = [];
@@ -7537,10 +7281,10 @@ function resolveReferences(seeds, ctx) {
   };
   const mayResolveTo = (from, spec, path) => {
     if (isPy(from)) {
-      const r = resolve7().py(from, spec);
+      const r = resolve8().py(from, spec);
       return r !== "external" && r !== "unknown" && r.includes(path);
     }
-    return mayBe(resolve7().js(from, spec), spec, path);
+    return mayBe(resolve8().js(from, spec), spec, path);
   };
   const queue = [];
   const enqueue = (path, names2, exported = []) => queue.push({ path, names: new Set(names2), exported: new Set(exported) });
@@ -8026,13 +7770,13 @@ function analyzeChanges(diffs, read, opts = {}) {
       if (!parser2) {
         fc.fileLevel = "no-parser";
       } else {
-        const lines3 = changedLines(d);
+        const lines4 = changedLines(d);
         const units = /* @__PURE__ */ new Set();
         let moduleLevel = false;
         const parsedSides = {};
         const moduleSides = {};
         for (const side of ["old", "new"]) {
-          const ls = lines3[side];
+          const ls = lines4[side];
           if (!ls.length) continue;
           const src = read(side, d.path);
           if (src === null) {
@@ -8245,12 +7989,6 @@ function durationsFromReport(report, root) {
     out2.set(name2, Math.max(1e-3, (t.endTime - t.startTime) / 1e3));
   }
   return out2;
-}
-function median(xs) {
-  if (!xs.length) return 0;
-  const s = [...xs].sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
 // ../engine/src/specs.ts
@@ -8475,7 +8213,7 @@ function jsSpecs(src) {
 function pySpecs(src) {
   if (src.length > MAX_SPEC_SCAN_BYTES) return "unreadable";
   const out2 = /* @__PURE__ */ new Set();
-  const lines3 = src.split("\n");
+  const lines4 = src.split("\n");
   const noComment = (x) => {
     const h = x.indexOf("#");
     return h < 0 ? x : x.slice(0, h);
@@ -8491,8 +8229,8 @@ function pySpecs(src) {
     }
     return t;
   });
-  for (let i2 = 0; i2 < lines3.length; i2++) {
-    const parts2 = statements(lines3[i2]);
+  for (let i2 = 0; i2 < lines4.length; i2++) {
+    const parts2 = statements(lines4[i2]);
     for (let pi = 0; pi < parts2.length; pi++) {
       const line = parts2[pi];
       if (line.startsWith("import ") || line.startsWith("import	")) {
@@ -8510,8 +8248,8 @@ function pySpecs(src) {
       if (!tail.startsWith("import")) continue;
       tail = tail.slice(6);
       if (pi === parts2.length - 1 && tail.includes("(") && !tail.includes(")"))
-        for (let k = 1; k <= 500 && i2 + 1 < lines3.length; k++) {
-          const more = noComment(lines3[++i2]);
+        for (let k = 1; k <= 500 && i2 + 1 < lines4.length; k++) {
+          const more = noComment(lines4[++i2]);
           tail += " " + more;
           if (more.includes(")")) break;
         }
@@ -9028,6 +8766,231 @@ function planSelection(input) {
   return plan({ basis, from, map: mapInfo, changes, tests, skipped, universe });
 }
 
+// ../engine/src/shard.ts
+import { createHash as createHash2 } from "node:crypto";
+var SHARD_VERSION = "shard@1";
+var MAX_SHARDS = 256;
+var MAX_SECONDS = 86400;
+var usable = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= MAX_SECONDS;
+function median(xs) {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+var uniqueTests = (tests) => [...new Set(tests)].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+function estimateDurations(tests, src) {
+  const all = uniqueTests(tests);
+  const seconds = /* @__PURE__ */ new Map();
+  const counts = { ledger: 0, history: 0, fallback: 0 };
+  const missing = [];
+  for (const t of all) {
+    const l = src.ledger?.get(t);
+    const h = src.history?.get(t);
+    if (usable(l)) {
+      seconds.set(t, l);
+      counts.ledger++;
+    } else if (usable(h)) {
+      seconds.set(t, h);
+      counts.history++;
+    } else missing.push(t);
+  }
+  const known = [...seconds.values()];
+  const fallbackSeconds = known.length ? Math.max(1e-3, median(known)) : 1;
+  for (const t of missing) seconds.set(t, fallbackSeconds);
+  counts.fallback = missing.length;
+  const basis = counts.ledger + counts.history === 0 ? "files" : counts.ledger === all.length ? "ledger" : counts.history === all.length ? "history" : "mixed";
+  return { seconds, counts, basis, fallbackSeconds };
+}
+var emptyShards = (n) => Array.from({ length: n }, (_, index) => ({
+  index,
+  total: n,
+  label: `${index + 1}/${n}`,
+  tests: [],
+  seconds: 0
+}));
+function checkCount(n) {
+  if (!Number.isInteger(n) || n < 1 || n > MAX_SHARDS)
+    throw new Error(`shard count must be an integer from 1 to ${MAX_SHARDS}, got ${n}`);
+}
+var Lightest = class {
+  h;
+  load;
+  constructor(load) {
+    this.load = load;
+    this.h = load.map((_, i2) => i2);
+  }
+  less(a, b) {
+    return this.load[a] < this.load[b] || this.load[a] === this.load[b] && a < b;
+  }
+  top() {
+    return this.h[0];
+  }
+  /** Call after raising the top's load. */
+  siftTop() {
+    const h = this.h;
+    let i2 = 0;
+    for (; ; ) {
+      const l = 2 * i2 + 1;
+      const r = l + 1;
+      let m = i2;
+      if (l < h.length && this.less(h[l], h[m])) m = l;
+      if (r < h.length && this.less(h[r], h[m])) m = r;
+      if (m === i2) return;
+      [h[i2], h[m]] = [h[m], h[i2]];
+      i2 = m;
+    }
+  }
+};
+function assignShards(tests, seconds, n) {
+  checkCount(n);
+  const all = uniqueTests(tests);
+  const ms2 = (t) => {
+    const s = seconds.get(t);
+    return usable(s) ? Math.round(s * 1e3) : 0;
+  };
+  const count = Math.max(1, Math.min(n, all.length));
+  const shards = emptyShards(count);
+  const load = new Array(count).fill(0);
+  const heap = new Lightest(load);
+  const order = all.map((t) => ({ t, ms: ms2(t) })).sort((a, b) => b.ms - a.ms || (a.t < b.t ? -1 : 1));
+  for (const { t, ms: d } of order) {
+    const i2 = heap.top();
+    shards[i2].tests.push(t);
+    load[i2] += d;
+    heap.siftTop();
+  }
+  for (const s of shards) {
+    s.tests.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    s.seconds = Math.round(load[s.index] / 100) / 10;
+  }
+  return shards;
+}
+function estimate(shards, est, model) {
+  const p = Math.max(1, model.parallelism);
+  let wall = 0;
+  let billed = 0;
+  for (const s of shards) {
+    let longest = 0;
+    for (const t of s.tests) longest = Math.max(longest, est.get(t) ?? 0);
+    const job = model.setupSeconds + Math.max(s.seconds / p, longest);
+    wall = Math.max(wall, job);
+    billed += Math.max(1, Math.ceil(job / 60 - 1e-9));
+  }
+  return { wallSeconds: Math.round(wall * 10) / 10, billedMinutes: billed };
+}
+var DEFAULT_AUTO = { targetSeconds: 600, maxShards: 16, maxCostRatio: 1.5 };
+var DEFAULT_MODEL = { setupSeconds: 60, parallelism: 1 };
+function chooseShardCount(tests, est, model, opts) {
+  checkCount(opts.maxShards);
+  const all = uniqueTests(tests);
+  const top = Math.max(1, Math.min(opts.maxShards, all.length));
+  const candidates = [];
+  let fastest = Infinity;
+  let flat = 0;
+  for (let n = 1; n <= top && flat < 4; n++) {
+    const c = { n, ...estimate(assignShards(all, est, n), est, model) };
+    candidates.push(c);
+    if (c.wallSeconds < fastest - 1e-9) {
+      fastest = c.wallSeconds;
+      flat = 0;
+    } else flat++;
+  }
+  const one = candidates[0];
+  const cap3 = one.billedMinutes * Math.max(1, opts.maxCostRatio);
+  const within = candidates.filter((c) => c.billedMinutes <= cap3 + 1e-9);
+  const meets = within.find((c) => c.wallSeconds <= opts.targetSeconds);
+  if (meets)
+    return {
+      n: meets.n,
+      why: meets.n === 1 ? `one job already finishes within the ${fmt(opts.targetSeconds)} target` : `the fewest shards that finish within the ${fmt(opts.targetSeconds)} target`,
+      candidates
+    };
+  const best = Math.min(...within.map((c) => c.wallSeconds));
+  const pick = within.find((c) => c.wallSeconds <= best * 1.02);
+  return {
+    n: pick.n,
+    why: `no count within the cost cap (${opts.maxCostRatio}x one job's billed minutes, at most ${opts.maxShards} shards) meets the ${fmt(opts.targetSeconds)} target; the fastest within it`,
+    candidates
+  };
+}
+var fmt = (s) => s >= 60 ? `${Math.round(s / 60 * 10) / 10} min` : `${Math.round(s)} s`;
+function planShards(tests, src, opts) {
+  const all = uniqueTests(tests);
+  const e = estimateDurations(all, src);
+  const model = { ...DEFAULT_MODEL, ...opts.model };
+  let n;
+  let why;
+  if (opts.shards === "auto") {
+    const c = chooseShardCount(all, e.seconds, model, { ...DEFAULT_AUTO, ...opts.auto });
+    n = c.n;
+    why = c.why;
+  } else {
+    checkCount(opts.shards);
+    n = opts.shards;
+    why = "fixed shard count";
+  }
+  const shards = assignShards(all, e.seconds, n);
+  const one = estimate(assignShards(all, e.seconds, 1), e.seconds, model);
+  return {
+    version: SHARD_VERSION,
+    n: shards.length,
+    choice: opts.shards === "auto" ? "auto" : "fixed",
+    why,
+    shards,
+    basis: e.basis,
+    counts: e.counts,
+    fallbackSeconds: Math.round(e.fallbackSeconds * 1e3) / 1e3,
+    model,
+    estimate: {
+      ...estimate(shards, e.seconds, model),
+      unshardedWallSeconds: one.wallSeconds,
+      unshardedBilledMinutes: one.billedMinutes
+    },
+    digest: shardDigest(shards)
+  };
+}
+var shardDigest = (shards) => createHash2("sha256").update(JSON.stringify([SHARD_VERSION, shards.length, shards.map((s) => s.tests)])).digest("hex");
+function parseShardLabel(label) {
+  const m = /^\s*(\d{1,3})\s*\/\s*(\d{1,3})\s*$/.exec(label);
+  const i2 = m ? Number(m[1]) : NaN;
+  const total = m ? Number(m[2]) : NaN;
+  if (!m || total < 1 || total > MAX_SHARDS || i2 < 1 || i2 > total)
+    throw new Error(
+      `shard must look like "2/4" (1-based index / total, total 1-${MAX_SHARDS}), got ${JSON.stringify(label)}`
+    );
+  return { index: i2 - 1, total };
+}
+function projectSharding(fileSeconds, opts = {}) {
+  const tests = uniqueTests([...fileSeconds.keys()].filter((t) => usable(fileSeconds.get(t))));
+  const est = new Map(tests.map((t) => [t, fileSeconds.get(t)]));
+  const serial = tests.reduce((s, t) => s + est.get(t), 0);
+  const wall = usable(opts.wallSeconds ?? void 0) && opts.wallSeconds > 0 ? opts.wallSeconds : null;
+  const parallelism = wall ? Math.max(1, serial / wall) : 1;
+  const startup = wall ? Math.max(0, wall - serial / parallelism) : 0;
+  const model = {
+    setupSeconds: (opts.setupSeconds ?? DEFAULT_MODEL.setupSeconds) + startup,
+    parallelism
+  };
+  const auto = { ...DEFAULT_AUTO, ...opts.auto };
+  const choice = tests.length ? chooseShardCount(tests, est, model, auto) : { n: 1, why: "no measured test files", candidates: [] };
+  const unsharded = estimate(assignShards(tests, est, 1), est, model);
+  const most = Math.max(1, Math.min(MAX_SHARDS, tests.length));
+  const ns = [.../* @__PURE__ */ new Set([...opts.ns ?? [2, 4, 8], choice.n])].filter((n) => Number.isInteger(n) && n >= 1 && n <= most).sort((a, b) => a - b);
+  const options = ns.map((n) => ({ n, ...estimate(assignShards(tests, est, n), est, model) }));
+  return {
+    kind: "projection",
+    version: SHARD_VERSION,
+    files: tests.length,
+    serialSeconds: Math.round(serial * 10) / 10,
+    observedWallSeconds: wall === null ? null : Math.round(wall * 10) / 10,
+    parallelism: Math.round(parallelism * 100) / 100,
+    setupSeconds: Math.round(model.setupSeconds * 10) / 10,
+    unsharded,
+    options,
+    auto: { ...options.find((o) => o.n === choice.n), why: choice.why }
+  };
+}
+
 // ../engine/src/index.ts
 try {
   await initParsers();
@@ -9038,34 +9001,358 @@ try {
 }
 
 // src/shards.ts
-function balanceShards(tests, durations, n) {
-  const count = Math.max(1, Math.min(n, tests.length));
-  const known = tests.map((t) => durations.get(t)).filter((d) => d !== void 0);
-  const fallback = known.length ? median(known) : 1;
-  const est = (t) => durations.get(t) ?? fallback;
-  const shards = fullRunShards(count);
-  const sorted = [...tests].sort((a, b) => est(b) - est(a) || (a < b ? -1 : 1));
-  for (const t of sorted) {
-    let min = shards[0];
-    for (const s of shards) if (s.seconds < min.seconds) min = s;
-    min.tests.push(t);
-    min.seconds += est(t);
-  }
-  for (const s of shards) {
-    s.tests.sort();
-    s.seconds = Math.round(s.seconds * 10) / 10;
-  }
-  return shards;
+function num(name2, raw2, dflt, min, max, integer = false) {
+  if (!raw2) return dflt;
+  const n = Number(raw2);
+  if (!Number.isFinite(n) || n < min || n > max || integer && !Number.isInteger(n))
+    throw new InputError(
+      `input ${name2} must be ${integer ? "an integer" : "a number"} >= ${min} and <= ${max}, got ${raw2}`
+    );
+  return n;
 }
-function fullRunShards(n) {
-  return Array.from({ length: n }, (_, index) => ({
-    index,
-    total: n,
-    label: `${index + 1}/${n}`,
-    tests: [],
-    seconds: 0
-  }));
+var MAX_PLAN_FILES = 5e4;
+function parseShardCount(raw2) {
+  if (!raw2) return 1;
+  if (raw2.trim().toLowerCase() === "auto") return "auto";
+  const n = Number(raw2);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_SHARDS)
+    throw new InputError(`input shards must be auto or an integer >= 1 and <= ${MAX_SHARDS}, got ${raw2}`);
+  return n;
 }
+function parseShardSettings(env) {
+  return {
+    shards: parseShardCount(getInput(env, "shards")),
+    auto: {
+      targetSeconds: num("shard-target-minutes", getInput(env, "shard-target-minutes"), 10, 0.1, 24 * 60) * 60,
+      maxShards: num("shard-max", getInput(env, "shard-max"), 16, 1, MAX_SHARDS, true),
+      maxCostRatio: num("shard-cost-cap", getInput(env, "shard-cost-cap"), 1.5, 1, 100)
+    },
+    setupSeconds: num("shard-setup-seconds", getInput(env, "shard-setup-seconds"), 60, 0, 24 * 3600)
+  };
+}
+function selectedShards(tests, durations, settings, cap3) {
+  return planShards(tests, { history: durations }, shardPlanOptions(settings, cap3));
+}
+var shardPlanOptions = (settings, cap3) => ({
+  shards: settings.shards === "auto" ? "auto" : Math.min(settings.shards, cap3),
+  auto: { ...settings.auto, maxShards: Math.min(settings.auto.maxShards, cap3) },
+  model: { setupSeconds: settings.setupSeconds }
+});
+function fullRunCount(durations, settings, cap3) {
+  if (settings.shards !== "auto") return { n: Math.min(settings.shards, cap3), plan: null };
+  if (!durations?.size) return { n: 1, plan: null };
+  if (durations.size > MAX_PLAN_FILES) return { n: 1, plan: null };
+  const plan = planShards(durations.keys(), { history: durations }, shardPlanOptions(settings, cap3));
+  return { n: plan.n, plan };
+}
+var fullRunShards = (n) => emptyShards(n);
+function planSummary(plan, n, full) {
+  return plan ? {
+    n,
+    choice: plan.choice,
+    why: plan.why,
+    basis: plan.basis,
+    unmeasured: plan.counts.fallback,
+    estimated: plan.estimate,
+    digest: full ? null : plan.digest,
+    runnerShards: full
+  } : {
+    n,
+    choice: "fixed",
+    why: n > 1 ? "fixed shard count" : "one shard",
+    basis: null,
+    runnerShards: full
+  };
+}
+function nativeShardArgs(runner, label) {
+  const { index, total } = parseShardLabel(label);
+  const l = `${index + 1}/${total}`;
+  switch (runner) {
+    case "vitest":
+    case "jest":
+      return `--shard=${l}`;
+    case "node-test":
+      return `--test-shard=${l}`;
+    case "pytest":
+      return `--jiffy-shard=${l}`;
+  }
+}
+
+// src/inputs.ts
+var InputError = class extends Error {
+};
+var FALSE = /* @__PURE__ */ new Set(["false", "0", "no", "off", ""]);
+function parseNumber(name2, raw2, dflt, { min, max = Infinity, integer }) {
+  if (!raw2) return dflt;
+  const n = Number(raw2);
+  if (!Number.isFinite(n) || n < min || n > max || integer && !Number.isInteger(n))
+    throw new InputError(
+      `input ${name2} must be ${integer ? "an integer" : "a number"} >= ${min}${max < Infinity ? ` and <= ${max}` : ""}, got ${raw2}`
+    );
+  return n;
+}
+function killSwitch(env) {
+  const vals = [getInput(env, "run-all"), (env.JIFFY_RUN_ALL ?? "").trim()];
+  return vals.some((v) => !FALSE.has(v.toLowerCase()));
+}
+function parseSampleRate(raw2) {
+  if (!raw2) return 0.05;
+  try {
+    return parseRate(raw2);
+  } catch (e) {
+    throw new InputError(`input sample-rate ${e.message}`);
+  }
+}
+function parseServiceUrl(raw2) {
+  if (!raw2) return "";
+  let u;
+  try {
+    u = new URL(raw2);
+  } catch {
+    throw new InputError(`input service-url is not a URL: ${raw2}`);
+  }
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && local))
+    throw new InputError(`input service-url must be https, got ${raw2}`);
+  return raw2;
+}
+function parseInputs(env) {
+  const mode = getInput(env, "mode") || "report";
+  if (mode !== "report" && mode !== "enforce")
+    throw new InputError(`input mode must be report or enforce, got ${JSON.stringify(mode)}`);
+  return {
+    map: getInput(env, "map"),
+    base: getInput(env, "base"),
+    durations: getInput(env, "durations"),
+    mode,
+    matrix: getInput(env, "matrix"),
+    shard: parseShardSettings(env),
+    killSwitch: killSwitch(env),
+    maxMapAgeDays: parseNumber("max-map-age-days", getInput(env, "max-map-age-days"), 14, { min: 0 }),
+    timeoutSeconds: parseNumber("timeout-seconds", getInput(env, "timeout-seconds"), 60, { min: 1 }),
+    workingDirectory: getInput(env, "working-directory") || env.GITHUB_WORKSPACE || ".",
+    sampleRate: parseSampleRate(getInput(env, "sample-rate")),
+    serviceUrl: parseServiceUrl(getInput(env, "service-url")),
+    quarantine: getInput(env, "quarantine"),
+    always: getInput(env, "always").split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
+  };
+}
+
+// src/matrix.ts
+var same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function parseMatrix(text) {
+  const m = JSON.parse(text);
+  if (!m || typeof m !== "object" || Array.isArray(m)) throw new Error("matrix must be a JSON object");
+  for (const [k, v] of Object.entries(m))
+    if (!Array.isArray(v)) throw new Error(`matrix.${k} must be an array`);
+  return m;
+}
+function expandMatrix(m) {
+  const axes = Object.entries(m).filter(([k]) => k !== "include" && k !== "exclude");
+  let combos = axes.length ? [{}] : [];
+  for (const [k, vs] of axes) combos = combos.flatMap((c) => vs.map((v) => ({ ...c, [k]: v })));
+  const excludes = m.exclude ?? [];
+  combos = combos.filter((c) => !excludes.some((e) => Object.entries(e).every(([k, v]) => same(c[k], v))));
+  const axisNames = new Set(axes.map(([k]) => k));
+  const originals = combos.map((c) => ({ ...c }));
+  for (const inc of m.include ?? []) {
+    let matched = false;
+    originals.forEach((orig, i2) => {
+      if (Object.entries(inc).every(([k, v]) => !axisNames.has(k) || same(orig[k], v))) {
+        Object.assign(combos[i2], inc);
+        matched = true;
+      }
+    });
+    if (!matched) combos.push({ ...inc });
+  }
+  return combos;
+}
+var LINUX = /ubuntu|linux/i;
+function pruneMatrix(m) {
+  const combos = expandMatrix(m);
+  if (!combos.length) throw new Error("matrix has no combinations");
+  const kept = combos.find((c) => Object.values(c).some((v) => typeof v === "string" && LINUX.test(v))) ?? combos[0];
+  const matrix = Object.fromEntries(Object.entries(kept).map(([k, v]) => [k, [v]]));
+  return { matrix, kept, total: combos.length };
+}
+
+// src/protocol.ts
+var OIDC_AUDIENCE = "jiffy";
+var SERVICE_TIMEOUT_MS = 5e3;
+var PROTOCOL_VERSION = 1;
+var seg = encodeURIComponent;
+var servicePaths = {
+  /**
+   * GET: 200 with the newest binary coverage map (`application/octet-stream`, encodeMap format) recorded at
+   * or before commit `before` on the default branch; 404 when there is none.
+   */
+  map: (owner, repo, before) => `/v1/maps/${seg(owner)}/${seg(repo)}?before=${seg(before)}`,
+  /**
+   * GET (the ledger, docs/spec/ledger.md §3.3): 200 with the newest *signed* map at or before `before` and its claims
+   * and signature in headers (MAP_CLAIMS_HEADER, MAP_SIGNATURE_HEADER); 404 when there is none. The in-job step reads
+   * maps only from here.
+   */
+  ledgerMap: (owner, repo, before) => `/v1/ledger/maps/${seg(owner)}/${seg(repo)}?before=${seg(before)}`,
+  /** GET: 200 with a RepoConfig. */
+  config: (owner, repo) => `/v1/repos/${seg(owner)}/${seg(repo)}/config`,
+  /** GET: 200 with a QuarantineList (@jiffy/flaky/state): flaky tests kept out of the fast check (R13). */
+  quarantine: (owner, repo) => `/v1/repos/${seg(owner)}/${seg(repo)}/quarantine`,
+  /**
+   * GET (OIDC, the ledger): 200 with the repo's flaky-test quarantine list, signed (`{claims, signature}`,
+   * @jiffy/ledger/signing QuarantineClaims). The step's quarantine override reads only this.
+   */
+  quarantineList: (owner, repo) => `/v1/ledger/quarantine/${seg(owner)}/${seg(repo)}`,
+  /** POST (OIDC): the step's per-test results (`tensile.ci-upload`, docs/spec/ledger.md §6.1). */
+  ledgerUploads: "/v1/ledger/uploads",
+  /** POST (OIDC): the step's quarantine override record (`tensile.quarantine-record`), recorded as a claim. */
+  quarantineRecords: "/v1/ledger/quarantine-records",
+  /** POST a DecisionPayload: any 2xx (body optional, DecisionAck when present). */
+  decisions: "/v1/decisions"
+};
+var MAP_CLAIMS_HEADER = "x-tensile-map-claims";
+var MAP_SIGNATURE_HEADER = "x-tensile-map-signature";
+var MAX_TRIGGERS = 50;
+var EVIDENCE_PATH = "/v1/evidence";
+var EVIDENCE_MAX_BYTES = 5 * 1024 * 1024;
+var EVIDENCE_PREFIX = "jiffy-evidence-";
+var PLACEHOLDER_SUBJECT = "evidence-step-unfinished";
+
+// src/quarantine.ts
+import { readFileSync as readFileSync3 } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+
+// ../flaky/src/state.ts
+var STATE_VERSION = 1;
+var isStr = (x) => typeof x === "string";
+function parseQuarantine(json) {
+  const o = json;
+  if (!o || typeof o !== "object") throw new Error("quarantine must be a JSON object");
+  if (o.version !== STATE_VERSION) throw new Error(`unsupported quarantine version ${String(o.version)}`);
+  const entries = Array.isArray(o.tests) ? o.tests : o.quarantine && typeof o.quarantine === "object" ? Object.values(o.quarantine) : null;
+  if (!entries) throw new Error("quarantine has neither tests[] nor quarantine{}");
+  for (const e of entries)
+    if (!e || !isStr(e.test) || !isStr(e.file) || !e.file || !isStr(e.reason))
+      throw new Error(`malformed quarantine entry ${JSON.stringify(e)}`);
+  return { version: STATE_VERSION, tests: entries };
+}
+
+// src/http.ts
+var ServiceError = class extends Error {
+  /** HTTP status, when the server answered. */
+  status;
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+};
+async function call(what, url, init2, timeoutMs) {
+  let res;
+  try {
+    res = await fetch(url, { ...init2, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e) {
+    const err2 = e;
+    const why = err2.name === "TimeoutError" ? `timed out after ${timeoutMs / 1e3} s` : err2.message;
+    throw new ServiceError(`${what}: ${why}`);
+  }
+  if (!res.ok) throw new ServiceError(`${what}: HTTP ${res.status}`, res.status);
+  return res;
+}
+async function oidcToken(env, timeoutMs) {
+  const reqUrl = env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const reqToken = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!reqUrl || !reqToken)
+    throw new ServiceError("no OIDC token: the job needs `permissions: id-token: write`");
+  const u = new URL(reqUrl);
+  u.searchParams.set("audience", OIDC_AUDIENCE);
+  const res = await call(
+    "OIDC token request",
+    u.href,
+    { headers: { Authorization: `Bearer ${reqToken}`, Accept: "application/json" } },
+    timeoutMs
+  );
+  const body2 = await res.json().catch(() => null);
+  const token = body2?.value;
+  if (typeof token !== "string" || !/^[\w.~+/=-]+$/.test(token))
+    throw new ServiceError("OIDC token request: no token");
+  process.stdout.write(`::add-mask::${token}
+`);
+  return token;
+}
+
+// src/service.ts
+var base2 = (t) => t.url.replace(/\/+$/, "");
+var auth = (token) => ({ Authorization: `Bearer ${token}` });
+async function fetchConfig(t, token) {
+  const path = servicePaths.config(t.owner, t.repo);
+  const res = await call(`GET ${path}`, base2(t) + path, { headers: auth(token) }, t.timeoutMs);
+  const cfg = await res.json().catch(() => null);
+  if (!cfg || typeof cfg.runAll !== "boolean") throw new ServiceError(`GET ${path}: malformed config`);
+  if (cfg.mode !== void 0 && cfg.mode !== "report" && cfg.mode !== "enforce")
+    throw new ServiceError(`GET ${path}: unknown mode ${JSON.stringify(cfg.mode)}`);
+  if (cfg.selectionEnforce !== void 0 && (!Array.isArray(cfg.selectionEnforce) || cfg.selectionEnforce.some((k) => typeof k !== "string")))
+    throw new ServiceError(`GET ${path}: selectionEnforce must be a list of strings`);
+  const l = cfg.ledger;
+  if (l !== void 0 && (!l || typeof l.stale !== "boolean" || typeof l.complete !== "boolean" || typeof l.lagMs !== "number" || !Array.isArray(l.reasons)))
+    throw new ServiceError(`GET ${path}: malformed ledger freshness`);
+  return cfg;
+}
+async function fetchQuarantine(t, token) {
+  const path = servicePaths.quarantine(t.owner, t.repo);
+  const res = await call(`GET ${path}`, base2(t) + path, { headers: auth(token) }, t.timeoutMs);
+  try {
+    return parseQuarantine(await res.json());
+  } catch (e) {
+    throw new ServiceError(`GET ${path}: ${e.message}`);
+  }
+}
+async function fetchMap(t, token, before) {
+  const path = servicePaths.map(t.owner, t.repo, before);
+  const res = await call(`GET ${path}`, base2(t) + path, { headers: auth(token) }, t.timeoutMs);
+  return Buffer.from(await res.arrayBuffer());
+}
+async function fetchSignedMap(t, token, before) {
+  const path = servicePaths.ledgerMap(t.owner, t.repo, before);
+  const res = await call(`GET ${path}`, base2(t) + path, { headers: auth(token) }, t.timeoutMs);
+  const claims = res.headers.get(MAP_CLAIMS_HEADER);
+  const signature = res.headers.get(MAP_SIGNATURE_HEADER);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  const offered = claims !== null || signature !== null;
+  if (!claims || !signature || claims.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(claims))
+    return { bytes, signed: null, offered };
+  return { bytes, signed: { claims: Buffer.from(claims, "base64url").toString("utf8"), signature }, offered };
+}
+async function postDecision(t, token, d) {
+  const path = servicePaths.decisions;
+  const res = await call(
+    `POST ${path}`,
+    base2(t) + path,
+    {
+      method: "POST",
+      headers: { ...auth(token), "Content-Type": "application/json" },
+      body: JSON.stringify(d)
+    },
+    t.timeoutMs
+  );
+  await res.arrayBuffer();
+}
+
+// src/quarantine.ts
+async function loadQuarantine(opts) {
+  const entries = [];
+  if (opts.file) {
+    const p = isAbsolute(opts.file) ? opts.file : resolve(opts.cwd, opts.file);
+    let json;
+    try {
+      json = JSON.parse(readFileSync3(p, "utf8"));
+    } catch (e) {
+      throw new Error(`cannot read ${opts.file}: ${e.message}`);
+    }
+    entries.push(...parseQuarantine(json).tests);
+  }
+  if (opts.service) entries.push(...(await fetchQuarantine(opts.service.target, opts.service.token)).tests);
+  return entries;
+}
+var quarantinedFiles = (entries) => [...new Set(entries.map((e) => e.file))].sort();
 
 // src/summary.ts
 var MAX_ROWS = 300;
@@ -9242,9 +9529,14 @@ function repoPath(repo, input) {
   return rel && !rel.startsWith("..") && !isAbsolute2(rel) ? rel.split(sep).join("/") : null;
 }
 function rawShards(env) {
-  const n = Number(getInput(env, "shards"));
-  return Number.isInteger(n) && n >= 1 ? Math.min(n, MAX_JOBS) : 1;
+  try {
+    const n = parseShardCount(getInput(env, "shards"));
+    return n === "auto" ? 1 : Math.min(n, MAX_JOBS);
+  } catch {
+    return 1;
+  }
 }
+var requestedShards = (s) => s.shards === "auto" ? s.auto.maxShards : s.shards;
 var MAX_JOBS = 256;
 var OUTPUT_BUDGET = 256 * 1024;
 function shardCap(requested, matrix) {
@@ -9275,7 +9567,8 @@ function serviceFor(env, deps) {
 }
 function fullResult(env, inputs, reason, decision) {
   const matrix = inputs?.matrix ?? rawMatrix(env);
-  const cap3 = shardCap(inputs?.shards ?? rawShards(env), matrix);
+  const cap3 = shardCap(inputs ? requestedShards(inputs.shard) : rawShards(env), matrix);
+  const count = inputs ? fullRunCount(decision?.durations ?? null, inputs.shard, cap3.shards) : { n: cap3.shards, plan: null };
   return {
     runAll: true,
     reason,
@@ -9284,7 +9577,8 @@ function fullResult(env, inputs, reason, decision) {
     sampled: [],
     quarantined: [],
     quarantine: [],
-    shards: fullRunShards(cap3.shards),
+    shards: fullRunShards(count.n),
+    shardPlan: planSummary(count.plan, count.n, true),
     matrix,
     pruned: null,
     decision,
@@ -9401,7 +9695,8 @@ async function decideLocal(env, deps, svc) {
   const quarantined = toRun.filter((t) => present.has(t));
   const broken = [...tests, ...quarantined].find((t) => /[\r\n]/.test(t));
   if (broken) return full(`a test path contains a line break: ${JSON.stringify(broken)}`, decision);
-  const cap3 = shardCap(inputs.shards, prunedText);
+  const cap3 = shardCap(requestedShards(inputs.shard), prunedText);
+  const shardPlan = tests.length ? selectedShards(tests, decision.durations ?? /* @__PURE__ */ new Map(), inputs.shard, cap3.shards) : null;
   const result = {
     runAll: false,
     reason: null,
@@ -9410,7 +9705,8 @@ async function decideLocal(env, deps, svc) {
     sampled: decision.sampled,
     quarantined,
     quarantine: applied.filter((e) => quarantined.includes(e.file)),
-    shards: tests.length ? balanceShards(tests, decision.durations ?? /* @__PURE__ */ new Map(), cap3.shards) : [],
+    shards: shardPlan?.shards ?? [],
+    shardPlan: planSummary(shardPlan, shardPlan?.n ?? 0, false),
     matrix: prunedText,
     pruned,
     decision,
@@ -9506,6 +9802,7 @@ function writeOutputs(sink, r) {
     ["sampled", JSON.stringify(r.sampled)],
     ["quarantined", JSON.stringify(r.quarantined)],
     ["shards", JSON.stringify(r.shards)],
+    ["shard-plan", JSON.stringify(r.shardPlan)],
     ["matrix", r.matrix],
     ["run-all", String(r.runAll)]
   ]);
@@ -9533,14 +9830,14 @@ async function runGate(env, sink, deps) {
 
 // src/start.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { mkdirSync as mkdirSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname as dirname2, join } from "node:path";
 
 // src/identity.ts
-import { createHash as createHash2 } from "node:crypto";
-var sha1 = (s) => createHash2("sha1").update(s).digest("hex");
+import { createHash as createHash3 } from "node:crypto";
+var sha1 = (s) => createHash3("sha1").update(s).digest("hex");
 var JOB_MAX = 200;
 var CONTROL_ALL = /[\u0000-\u001f\u007f]/g;
 function fitLine(s, max) {
@@ -9637,7 +9934,7 @@ function gitAuthEnv(cwd, token, server) {
     GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`
   };
 }
-var sha256 = (text) => createHash3("sha256").update(text).digest("hex");
+var sha256 = (text) => createHash4("sha256").update(text).digest("hex");
 var tryGit = (git2, args2) => {
   try {
     return git2(args2).trim();
@@ -9980,13 +10277,14 @@ function mainStart(env, sink) {
 }
 
 // src/step/outcome.ts
-import { createHash as createHash5 } from "node:crypto";
-import { existsSync, mkdirSync as mkdirSync3, readFileSync as readFileSync5, statSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve3 } from "node:path";
+import { createHash as createHash8 } from "node:crypto";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync8, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname3, isAbsolute as isAbsolute5, join as join3, resolve as resolve5 } from "node:path";
 
 // ../flaky/src/results.ts
-var RANK = { passed: 0, retried: 1, failed: 2 };
-var combine = (a, b) => RANK[a] >= RANK[b] ? a : b;
+var RANK_ALL = { skipped: -1, passed: 0, retried: 1, failed: 2 };
+var combineAll = (a, b) => RANK_ALL[a] >= RANK_ALL[b] ? a : b;
+var MAX_PROBLEMS = 20;
 var slashes = (p) => p.replace(/\\/g, "/");
 function relative2(path, root) {
   let p = slashes(path);
@@ -9998,44 +10296,86 @@ function relative2(path, root) {
 }
 var Collector = class {
   byId = /* @__PURE__ */ new Map();
-  add(file, name2, outcome) {
-    if (!outcome) return;
+  problems = [];
+  problem(p) {
+    if (this.problems.length < MAX_PROBLEMS) this.problems.push(p.slice(0, 300));
+  }
+  add(file, name2, outcome, durationMs, retries) {
     const id = `${file} > ${name2}`;
     const r = this.byId.get(id);
-    if (r) r.outcome = combine(r.outcome, outcome);
-    else this.byId.set(id, { id, file, name: name2, outcome });
+    const ms2 = durationMs !== void 0 && Number.isFinite(durationMs) && durationMs >= 0 ? durationMs : void 0;
+    if (r) {
+      r.outcome = combineAll(r.outcome, outcome);
+      if (ms2 !== void 0) r.durationMs = (r.durationMs ?? 0) + ms2;
+      if (retries) r.retries = (r.retries ?? 0) + retries;
+    } else
+      this.byId.set(id, {
+        id,
+        file,
+        name: name2,
+        outcome,
+        ...ms2 !== void 0 && { durationMs: ms2 },
+        ...retries ? { retries } : {}
+      });
   }
   done() {
     return [...this.byId.values()];
   }
 };
+var SKIPPED = /* @__PURE__ */ new Set(["pending", "skipped", "todo", "disabled"]);
 function jsonOutcome(a) {
   if (a.status === "failed") return "failed";
-  if (a.status !== "passed") return null;
+  if (a.status !== "passed") return SKIPPED.has(String(a.status)) ? "skipped" : null;
   return a.retryReasons?.length || a.failureMessages?.length ? "retried" : "passed";
 }
 function fromJson(report, opts) {
-  if (!Array.isArray(report.testResults)) throw new Error("not a Vitest/Jest JSON report (no testResults)");
+  if (!report || typeof report !== "object" || !Array.isArray(report.testResults))
+    throw new Error("not a Vitest/Jest JSON report (no testResults)");
   const out2 = new Collector();
+  let cases = 0;
+  let failedCases = 0;
   for (const file of report.testResults) {
-    if (typeof file.name !== "string") continue;
-    const path = relative2(file.name, opts.root);
-    const cases = file.assertionResults ?? [];
-    for (const a of cases) {
-      const name2 = a.fullName || [...a.ancestorTitles ?? [], a.title ?? ""].filter(Boolean).join(" ");
-      out2.add(path, name2, jsonOutcome(a));
+    if (!file || typeof file.name !== "string") {
+      out2.problem("a test file entry has no name");
+      continue;
     }
-    if (file.status === "failed" && !cases.some((a) => a.status === "failed"))
+    const path = relative2(file.name, opts.root);
+    const list3 = Array.isArray(file.assertionResults) ? file.assertionResults : [];
+    for (const a of list3) {
+      if (!a || typeof a !== "object") continue;
+      const name2 = a.fullName || [...a.ancestorTitles ?? [], a.title ?? ""].filter(Boolean).join(" ");
+      cases++;
+      const o = jsonOutcome(a);
+      if (o === null) {
+        out2.problem(`${path}: a test has status ${JSON.stringify(a.status)}`);
+        continue;
+      }
+      if (o === "failed") failedCases++;
+      const retries = o === "retried" ? a.retryReasons?.length ?? a.failureMessages?.length ?? 0 : 0;
+      out2.add(path, name2, o, typeof a.duration === "number" ? a.duration : void 0, retries);
+    }
+    if (file.status === "failed" && !list3.some((a) => a?.status === "failed")) {
       out2.add(path, "(file)", "failed");
+      out2.problem(`${path} failed outside any test (it didn't load, or a hook threw)`);
+    }
   }
-  return out2.done();
+  if (typeof report.numRuntimeErrorTestSuites === "number" && report.numRuntimeErrorTestSuites > 0)
+    out2.problem(`${report.numRuntimeErrorTestSuites} test file(s) failed to run`);
+  if (report.wasInterrupted === true) out2.problem("the run was interrupted");
+  if (typeof report.numFailedTests === "number" && report.numFailedTests !== failedCases)
+    out2.problem(`the report counts ${report.numFailedTests} failed tests but lists ${failedCases}`);
+  if (typeof report.numTotalTests === "number" && report.numTotalTests !== cases)
+    out2.problem(`the report counts ${report.numTotalTests} tests but lists ${cases}`);
+  if (report.success === false && failedCases === 0 && !out2.problems.length)
+    out2.problem("the report says the run failed, with no failing test");
+  return { format: "json", tests: out2.done(), problems: out2.problems };
 }
 var ENTITIES = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
 function decode(s) {
   return s.replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (m, e) => {
     if (e[0] === "#") {
       const n = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-      return Number.isFinite(n) ? String.fromCodePoint(n) : m;
+      return Number.isFinite(n) && n >= 0 && n <= 1114111 ? String.fromCodePoint(n) : m;
     }
     return ENTITIES[e.toLowerCase()] ?? m;
   });
@@ -10097,52 +10437,114 @@ function stripMarkup(xml) {
   out2.push(xml.slice(start2));
   return out2.join("");
 }
+function nodeTotals(xml) {
+  const out2 = {};
+  const tail = xml.slice(-4096);
+  for (const m of tail.matchAll(/<!--\s*(fail|cancelled)\s+(\d{1,9})\s*-->/g))
+    out2[m[1]] = Number(m[2]);
+  return out2;
+}
+var declared = (v) => v !== void 0 && /^\d{1,9}$/.test(v.trim()) ? Number(v.trim()) : null;
 function fromJunit(xml, opts) {
+  const totals = nodeTotals(xml);
   const body2 = stripMarkup(xml);
   if (!/<testsuites?[\s>]/.test(body2)) throw new Error("not a JUnit XML report (no <testsuite>)");
   const resolveClass = classResolver(opts.files);
   const out2 = new Collector();
   const suites = [];
+  let rootDecl = null;
+  let allCases = 0;
+  let allFailures = 0;
+  let failedCases = 0;
   let tc = null;
   const finish = () => {
     if (!tc) return;
-    const suite = suites[suites.length - 1] ?? {};
+    const suite = suites[suites.length - 1]?.a ?? {};
     const { classname, name: name2 = "" } = tc.a;
     const rawFile = [tc.a.file, suite.file, classname, suite.name].find(looksLikePath) ?? (classname && resolveClass(classname)) ?? classname ?? suite.name ?? "";
     const file = relative2(rawFile, opts.root);
     const prefix = classname && !looksLikePath(classname) && !name2.startsWith(classname) ? `${classname} > ` : "";
-    const outcome = tc.failed ? "failed" : tc.skipped ? null : tc.reran ? "retried" : "passed";
-    out2.add(file, prefix + name2, outcome);
+    const outcome = tc.failures ? "failed" : tc.skipped ? "skipped" : tc.reruns ? "retried" : "passed";
+    const secs = tc.a.time !== void 0 ? Number(tc.a.time) : NaN;
+    out2.add(file, prefix + name2, outcome, Number.isFinite(secs) ? secs * 1e3 : void 0, tc.reruns);
+    allCases++;
+    allFailures += tc.failures;
+    if (tc.failures) failedCases++;
+    for (const s of suites) {
+      s.cases++;
+      s.failures += tc.failures;
+    }
     tc = null;
   };
   for (const m of body2.matchAll(/<(\/?)([\w:.-]+)((?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g)) {
     const [, close, tag, rest = "", selfClose] = m;
-    if (tag === "testsuite") {
-      if (close) suites.pop();
-      else if (!selfClose) suites.push(attrs(rest));
+    if (tag === "testsuites") {
+      if (!close && !rootDecl) rootDecl = attrs(rest);
+    } else if (tag === "testsuite") {
+      finish();
+      if (close) {
+        const s = suites.pop();
+        if (s) {
+          const tests = declared(s.a.tests);
+          const bad = (declared(s.a.failures) ?? 0) + (declared(s.a.errors) ?? 0);
+          const label = s.a.name ? `suite ${JSON.stringify(s.a.name.slice(0, 100))}` : "a suite";
+          if (tests !== null && tests !== s.cases)
+            out2.problem(`${label} counts ${tests} tests but lists ${s.cases}`);
+          if ((s.a.failures !== void 0 || s.a.errors !== void 0) && bad !== s.failures)
+            out2.problem(`${label} counts ${bad} failures and errors but lists ${s.failures}`);
+        }
+      } else if (!selfClose) suites.push({ a: attrs(rest), cases: 0, failures: 0 });
+      else {
+        const a = attrs(rest);
+        if ((declared(a.failures) ?? 0) + (declared(a.errors) ?? 0) > 0)
+          out2.problem(`an empty suite ${JSON.stringify((a.name ?? "").slice(0, 100))} counts failures`);
+      }
     } else if (tag === "testcase") {
       if (close) finish();
       else {
         finish();
-        tc = { a: attrs(rest), failed: false, skipped: false, reran: false };
+        tc = { a: attrs(rest), failures: 0, skipped: false, reruns: 0 };
         if (selfClose) finish();
       }
+    } else if (!close && (tag === "failure" || tag === "error")) {
+      if (tc) tc.failures++;
+      else out2.problem(`a ${tag} outside any test case`);
     } else if (tc && !close) {
-      if (tag === "failure" || tag === "error") tc.failed = true;
-      else if (tag === "skipped") tc.skipped = true;
-      else if (/^(flaky|rerun)(Failure|Error)$/.test(tag)) tc.reran = true;
+      if (tag === "skipped") tc.skipped = true;
+      else if (/^(flaky|rerun)(Failure|Error)$/.test(tag)) tc.reruns++;
     }
   }
   finish();
-  return out2.done();
+  if (suites.length) out2.problem("the report ends inside a suite (cut short)");
+  if (rootDecl) {
+    const tests = declared(rootDecl.tests);
+    const bad = (declared(rootDecl.failures) ?? 0) + (declared(rootDecl.errors) ?? 0);
+    if (tests !== null && tests !== allCases)
+      out2.problem(`the report counts ${tests} tests but lists ${allCases}`);
+    if ((rootDecl.failures !== void 0 || rootDecl.errors !== void 0) && bad !== allFailures)
+      out2.problem(`the report counts ${bad} failures and errors but lists ${allFailures}`);
+  }
+  if (totals.cancelled) out2.problem(`${totals.cancelled} test(s) were cancelled`);
+  if (totals.fail !== void 0 && totals.fail !== failedCases)
+    out2.problem(`the report counts ${totals.fail} failed tests but lists ${failedCases}`);
+  if (!/<\/testsuites?\s*>\s*$/.test(body2.trimEnd()) && !/<testsuites?[^>]*\/>\s*$/.test(body2.trimEnd()))
+    out2.problem("the report does not end with its closing tag (cut short)");
+  return { format: "junit", tests: out2.done(), problems: out2.problems };
 }
-function parseResults(text, opts = {}) {
+function parseReport(text, opts = {}) {
   const t = text.trimStart();
   return t.startsWith("<") ? fromJunit(t, opts) : fromJson(JSON.parse(t), opts);
 }
+function parseResults(text, opts = {}) {
+  const out2 = [];
+  for (const r of parseReport(text, opts).tests)
+    if (r.outcome !== "skipped") out2.push({ id: r.id, file: r.file, name: r.name, outcome: r.outcome });
+  return out2;
+}
 
 // ../ledger/src/contract.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
+var CI_UPLOAD_SCHEMA = "tensile.ci-upload";
 var LIMITS = {
   /** Test results in one upload. A bigger suite sends several parts. */
   testsPerUpload: 5e4,
@@ -10169,9 +10571,847 @@ function canonicalJson(v) {
 function matrixKey(matrix) {
   if (matrix === void 0) return "?";
   const c = canonicalJson(matrix ?? {});
-  return c.length <= 64 ? c : `h:${createHash4("sha256").update(c).digest("hex").slice(0, 32)}`;
+  return c.length <= 64 ? c : `h:${createHash5("sha256").update(c).digest("hex").slice(0, 32)}`;
 }
-var sha2562 = (s) => createHash4("sha256").update(s).digest("hex");
+function workflowFile2(workflowRef) {
+  const m = /^[^/]+\/[^/]+\/(.+?)@/.exec(workflowRef ?? "");
+  return m?.[1] ?? "?";
+}
+function envKey(workflow, jobKey2, matrix, runner) {
+  return `${workflow}#${jobKey2}#${matrix}#${runner}`;
+}
+var sha2562 = (s) => createHash5("sha256").update(s).digest("hex");
+
+// src/decide.ts
+import { existsSync, readFileSync as readFileSync5 } from "node:fs";
+import { isAbsolute as isAbsolute3, resolve as resolve3 } from "node:path";
+var isUrl = (s) => /^https?:\/\//i.test(s);
+async function readSource(src, cwd) {
+  if (isUrl(src)) {
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+  const p = isAbsolute3(src) ? src : resolve3(cwd, src);
+  if (!existsSync(p)) throw new Error("file not found");
+  return readFileSync5(p);
+}
+async function loadMap(from, { cwd, now, maxAgeDays }) {
+  if (!from) return { map: null, info: null, problem: "no coverage map configured" };
+  const src = typeof from === "string" ? from : from.label;
+  let raw2;
+  let map;
+  try {
+    raw2 = typeof from === "string" ? await readSource(from, cwd) : await from.read();
+  } catch (e) {
+    return { map: null, info: null, problem: `cannot read coverage map ${src}: ${e.message}` };
+  }
+  try {
+    map = decodeMap(raw2);
+  } catch (e) {
+    return { map: null, info: null, problem: `cannot decode coverage map ${src}: ${e.message}` };
+  }
+  const { commit, createdAt } = map.meta;
+  const info2 = {
+    source: src,
+    bytes: raw2.length,
+    tests: map.tests.size,
+    ...typeof commit === "string" && { commit },
+    ...typeof createdAt === "string" && { createdAt }
+  };
+  if (!map.tests.size) return { map: null, info: info2, problem: "coverage map has no tests" };
+  if (maxAgeDays > 0) {
+    const at = typeof createdAt === "string" ? Date.parse(createdAt) : NaN;
+    if (Number.isNaN(at))
+      return { map: null, info: info2, problem: "coverage map has no createdAt, so its age is unknown" };
+    const days = (now - at) / 864e5;
+    if (days > maxAgeDays)
+      return {
+        map: null,
+        info: info2,
+        problem: `coverage map is stale: recorded ${days.toFixed(1)} days ago (max-map-age-days ${maxAgeDays})`
+      };
+  }
+  return { map, info: info2, problem: null };
+}
+var slashes2 = (p) => p.replace(/\\/g, "/");
+function parseDurations(text, repo) {
+  const json = JSON.parse(text);
+  if (json && typeof json === "object" && Array.isArray(json.testResults)) {
+    const report = json;
+    const root = slashes2(repo).replace(/\/?$/, "/");
+    return durationsFromReport(
+      { testResults: report.testResults.map((t) => ({ ...t, name: slashes2(t.name) })) },
+      root
+    );
+  }
+  if (json && typeof json === "object" && !Array.isArray(json)) {
+    const out2 = /* @__PURE__ */ new Map();
+    for (const [k, v] of Object.entries(json)) {
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0)
+        throw new Error(`durations: ${k} is not a number of seconds`);
+      out2.set(slashes2(k), v);
+    }
+    return out2;
+  }
+  throw new Error("durations must be a Vitest/Jest JSON report or a {file: seconds} object");
+}
+function resolveBase(repo, candidates) {
+  const tried = [];
+  for (const c of candidates) {
+    try {
+      git(repo, ["rev-parse", "--verify", "--quiet", `${c}^{commit}`]);
+    } catch {
+      tried.push(c);
+      continue;
+    }
+    return { base: mergeBase(repo, c, "HEAD"), from: c };
+  }
+  throw new Error(
+    `cannot resolve a base (tried ${tried.join(", ")}); check out with fetch-depth: 0 so the base is present`
+  );
+}
+function missingAt(repo, rev, paths) {
+  const ok = paths.filter((p) => !p.includes("\n"));
+  if (!ok.length) return [];
+  const lines4 = git(
+    repo,
+    ["cat-file", "--batch-check"],
+    ok.map((p) => `${rev}:${p}`).join("\n") + "\n"
+  ).split("\n");
+  return ok.filter((_, i2) => !/^[0-9a-f]+ blob \d+$/.test(lines4[i2] ?? ""));
+}
+function checkHead(repo, head, expect) {
+  const want = expect.toLowerCase();
+  if (head === want) return;
+  const parents = git(repo, ["rev-list", "--parents", "-n", "1", head]).trim().split(" ").slice(1);
+  if (parents.length > 1 && parents.includes(want)) return;
+  throw new Error(
+    `HEAD ${head.slice(0, 10)} is not the pull request's head ${want.slice(0, 10)} or a merge of it (pull_request_target checks out the base unless told otherwise)`
+  );
+}
+function testsAddedSince(repo, since, head) {
+  const out2 = git(repo, ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", since, head]);
+  return out2.split("\0").filter((p) => p && classify(p) === "test");
+}
+var resolves = (repo, rev) => {
+  try {
+    git(repo, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+async function decide(input) {
+  const { repo, service } = input;
+  const t0 = performance.now();
+  const head = git(repo, ["rev-parse", "HEAD"]).trim();
+  if (input.expectHead) checkHead(repo, head, input.expectHead);
+  const { base: base3, from } = resolveBase(repo, input.baseCandidates);
+  if (base3 === head)
+    throw new Error(`HEAD is the base (${head.slice(0, 10)}): there is no change to compare`);
+  const t1 = performance.now();
+  const source = !input.map && service ? {
+    label: `${service.target.url} (map before ${base3.slice(0, 10)})`,
+    read: () => fetchMap(service.target, service.token, base3)
+  } : input.map;
+  const loaded = await loadMap(source, {
+    cwd: process.cwd(),
+    now: input.now,
+    maxAgeDays: input.maxMapAgeDays
+  });
+  const { info: info2 } = loaded;
+  let { map, problem } = loaded;
+  let durations = null;
+  if (input.durations) {
+    const p = isAbsolute3(input.durations) ? input.durations : resolve3(process.cwd(), input.durations);
+    durations = parseDurations(readFileSync5(p, "utf8"), repo);
+  }
+  let added = [];
+  if (map) {
+    const commit = map.meta.commit;
+    if (typeof commit !== "string" || !commit) {
+      problem = "coverage map has no commit, so tests added since it was recorded are unknown";
+    } else if (!resolves(repo, commit)) {
+      problem = `coverage map commit ${commit.slice(0, 10)} is not in this checkout (check out with fetch-depth: 0)`;
+    } else added = testsAddedSince(repo, commit, head);
+    if (problem) map = null;
+  }
+  const t2 = performance.now();
+  const alwaysRun = map ? mapAlwaysRun(map) ?? [] : [];
+  const knownTests = /* @__PURE__ */ new Set([
+    ...map?.tests.keys() ?? [],
+    ...alwaysRun,
+    ...durations?.keys() ?? [],
+    ...added
+  ]);
+  const changes = changesFromGit(repo, base3, head, { knownTests });
+  const t3 = performance.now();
+  const allTests = knownTests;
+  const prefixes = input.always ?? [];
+  const always = prefixes.length ? (t) => prefixes.some((p) => t.startsWith(p)) : void 0;
+  const selection = select({ changes, map, allTests, always });
+  const t4 = performance.now();
+  const quarantined = new Set(input.quarantined ?? []);
+  const missing = new Set(
+    missingAt(repo, head, [.../* @__PURE__ */ new Set([...selection.tests.keys(), ...selection.skipped, ...quarantined])])
+  );
+  const gone = [...selection.tests.keys()].filter((t) => missing.has(t));
+  const present = selection.skipped.filter((t) => !missing.has(t) && !quarantined.has(t));
+  const sampled = selection.runAll ? [] : sampleOrder(present, head).slice(0, sampleSize(input.sampleRate, present.length)).sort();
+  const known = /* @__PURE__ */ new Set([...selection.tests.keys(), ...selection.skipped]);
+  const edited = input.quarantineFile && changes.files.some((f) => f.path === input.quarantineFile) ? input.quarantineFile : null;
+  const quarantinePresent = edited ? [] : [...quarantined].filter((t) => known.has(t) && !missing.has(t) && !changes.changedTests.has(t)).sort();
+  const quarantineIgnored = edited ? `the change edits the quarantine list ${edited}` : null;
+  const t5 = performance.now();
+  const ms2 = (a, b) => Math.round((b - a) * 10) / 10;
+  return {
+    base: base3,
+    baseFrom: from,
+    head,
+    map: info2,
+    mapProblem: problem,
+    durations,
+    changes,
+    selection,
+    gone,
+    sampled,
+    quarantinePresent,
+    quarantineIgnored,
+    timings: { mapMs: ms2(t1, t2), diffMs: ms2(t0, t1) + ms2(t2, t3) + ms2(t4, t5), selectMs: ms2(t3, t4) }
+  };
+}
+
+// src/step/override.ts
+import { createHash as createHash7 } from "node:crypto";
+import { readFileSync as readFileSync7 } from "node:fs";
+import { join as join2 } from "node:path";
+
+// ../ledger/src/signing.ts
+import {
+  createHash as createHash6,
+  createPrivateKey,
+  createPublicKey,
+  sign as edSign,
+  verify as edVerify
+} from "node:crypto";
+var MAP_FORMAT = "jiffy.map.gz/1";
+var MAP_CLAIMS_VERSION = 1;
+var KID = /^[A-Za-z0-9_.-]{1,64}$/;
+function mapPublicKey(kid, key) {
+  if (!KID.test(kid)) throw new Error("map key id must be 1-64 of [A-Za-z0-9_.-]");
+  let k;
+  if (typeof key === "object") k = createPublicKey({ key: { ...key }, format: "jwk" });
+  else if (key.trim().startsWith("-----")) k = createPublicKey(key.trim());
+  else k = createPublicKey({ key: Buffer.from(key.trim(), "base64"), format: "der", type: "spki" });
+  if (k.asymmetricKeyType !== "ed25519") throw new Error(`map key ${kid} is not an Ed25519 key`);
+  return { kid, publicKey: k };
+}
+function mapSha256(bytes) {
+  return createHash6("sha256").update(bytes).digest("hex");
+}
+var MAX_CLAIMS_CHARS = 4096;
+var HEX40 = /^[0-9a-f]{40}$/;
+var HEX64 = /^[0-9a-f]{64}$/;
+function verifyMap(keys, signed, expect) {
+  const no = (reason) => ({ ok: false, reason });
+  if (!signed || typeof signed !== "object") return no("no signature");
+  const { claims: text, signature } = signed;
+  if (typeof text !== "string" || typeof signature !== "string") return no("no signature");
+  if (text.length > MAX_CLAIMS_CHARS || signature.length > 200) return no("signature too large");
+  let c;
+  try {
+    c = JSON.parse(text);
+  } catch {
+    return no("claims are not JSON");
+  }
+  if (!c || typeof c !== "object" || Array.isArray(c)) return no("claims are not an object");
+  if (c.v !== MAP_CLAIMS_VERSION) return no(`claims version ${String(c.v)} is not ${MAP_CLAIMS_VERSION}`);
+  if (canonicalJson(c) !== text) return no("claims are not canonical");
+  const key = keys.find((k) => k.kid === c.kid);
+  if (!key) return no(`unknown signing key ${String(c.kid)}`);
+  let good = false;
+  try {
+    good = edVerify(null, Buffer.from(text), key.publicKey, Buffer.from(signature, "base64url"));
+  } catch {
+    good = false;
+  }
+  if (!good) return no("bad signature");
+  if (typeof c.host !== "string" || c.host.toLowerCase() !== expect.host.toLowerCase())
+    return no(`map is for host ${String(c.host)}, not ${expect.host}`);
+  if (c.repoId !== expect.repoId) return no(`map is for repo ${String(c.repoId)}, not ${expect.repoId}`);
+  if (expect.tenant !== void 0 && c.tenant !== expect.tenant) return no("map is for another tenant");
+  if (typeof c.sha !== "string" || !HEX40.test(c.sha)) return no("map commit is not a sha");
+  if (expect.sha !== void 0 && c.sha !== expect.sha) return no(`map is for ${c.sha}, not ${expect.sha}`);
+  if (typeof c.mapSha256 !== "string" || !HEX64.test(c.mapSha256)) return no("map hash is not a sha256");
+  if (expect.mapSha256 !== void 0 && c.mapSha256 !== expect.mapSha256)
+    return no("map bytes do not match the signed hash");
+  if (c.format !== MAP_FORMAT) return no(`map format ${String(c.format)} is not ${MAP_FORMAT}`);
+  const at = Date.parse(c.createdAt);
+  if (!Number.isFinite(at)) return no("map has no signing time");
+  const now = (expect.now ?? /* @__PURE__ */ new Date()).getTime();
+  if (at > now + 6e4) return no("map signing time is in the future");
+  if (expect.maxAgeMs !== void 0 && now - at > expect.maxAgeMs)
+    return no(
+      `map signed ${Math.round((now - at) / 1e3)}s ago, over the ${Math.round(expect.maxAgeMs / 1e3)}s bound`
+    );
+  return { ok: true, claims: c };
+}
+var QUARANTINE_CLAIMS_TYPE = "tensile.quarantine/1";
+var QUARANTINE_MAX_TESTS = 1e3;
+var MAX_LIST_CHARS = 1024 * 1024;
+var isStr2 = (v, max) => typeof v === "string" && v.length > 0 && v.length <= max;
+function verifyQuarantine(keys, signed, expect) {
+  const no = (reason) => ({ ok: false, reason });
+  if (!signed || typeof signed !== "object") return no("no signature");
+  const { claims: text, signature } = signed;
+  if (typeof text !== "string" || typeof signature !== "string") return no("no signature");
+  if (text.length > MAX_LIST_CHARS || signature.length > 200) return no("signature too large");
+  let c;
+  try {
+    c = JSON.parse(text);
+  } catch {
+    return no("claims are not JSON");
+  }
+  if (!c || typeof c !== "object" || Array.isArray(c)) return no("claims are not an object");
+  if (c.t !== QUARANTINE_CLAIMS_TYPE) return no("claims are not a quarantine list");
+  if (canonicalJson(c) !== text) return no("claims are not canonical");
+  const key = keys.find((k) => k.kid === c.kid);
+  if (!key) return no(`unknown signing key ${String(c.kid)}`);
+  let good = false;
+  try {
+    good = edVerify(null, Buffer.from(text), key.publicKey, Buffer.from(signature, "base64url"));
+  } catch {
+    good = false;
+  }
+  if (!good) return no("bad signature");
+  if (typeof c.host !== "string" || c.host.toLowerCase() !== expect.host.toLowerCase())
+    return no(`list is for host ${String(c.host)}, not ${expect.host}`);
+  if (c.repoId !== expect.repoId) return no(`list is for repo ${String(c.repoId)}, not ${expect.repoId}`);
+  if (expect.tenant !== void 0 && c.tenant !== expect.tenant) return no("list is for another tenant");
+  const at = Date.parse(c.createdAt);
+  if (!Number.isFinite(at)) return no("list has no signing time");
+  const now = (expect.now ?? /* @__PURE__ */ new Date()).getTime();
+  if (at > now + 6e4) return no("list signing time is in the future");
+  if (now - at > expect.maxAgeMs)
+    return no(
+      `list signed ${Math.round((now - at) / 1e3)}s ago, over the ${Math.round(expect.maxAgeMs / 1e3)}s bound`
+    );
+  if (typeof c.enforce !== "boolean") return no("list has no enforce flag");
+  if (!c.ledger || typeof c.ledger.stale !== "boolean" || typeof c.ledger.complete !== "boolean")
+    return no("list has no ledger freshness");
+  if (typeof c.complete !== "boolean") return no("list has no completeness flag");
+  if (!Array.isArray(c.tests) || c.tests.length > QUARANTINE_MAX_TESTS) return no("list tests are malformed");
+  for (const e of c.tests) {
+    const x = e;
+    if (!x || typeof x !== "object" || !isStr2(x.test, 1e3) || !isStr2(x.env, 2e3) || !isStr2(x.decisionId, 100) || !isStr2(x.expiresAt, 40) || !Number.isFinite(Date.parse(x.expiresAt)) || !Array.isArray(x.owners) || x.owners.some((o) => !isStr2(o, 200)))
+      return no("a list entry is malformed");
+  }
+  return { ok: true, claims: c };
+}
+
+// src/step/keys.ts
+var PINNED_MAP_KEYS = Object.freeze([]);
+var KEY_ORIGIN = "https://jiffy-app-production.up.railway.app";
+var KID2 = /^[A-Za-z0-9_.-]{1,64}$/;
+var X = /^[A-Za-z0-9_-]{43}$/;
+var MAX_KEYS_BYTES = 64 * 1024;
+function toMapKeys(keys) {
+  const out2 = [];
+  for (const k of keys) {
+    if (!KID2.test(k.kid) || !X.test(k.x)) continue;
+    try {
+      out2.push(mapPublicKey(k.kid, { kty: "OKP", crv: "Ed25519", x: k.x }));
+    } catch {
+    }
+  }
+  return out2;
+}
+function parsePublishedKeys(json) {
+  const keys = json && typeof json === "object" ? json.keys : void 0;
+  if (!Array.isArray(keys)) return [];
+  const out2 = [];
+  for (const k of keys.slice(0, 32)) {
+    if (!k || typeof k !== "object") continue;
+    const j = k;
+    if (j.kty !== "OKP" || j.crv !== "Ed25519") continue;
+    if (j.status !== "active" && j.status !== "verify") continue;
+    if (typeof j.kid !== "string" || typeof j.x !== "string" || !KID2.test(j.kid) || !X.test(j.x)) continue;
+    out2.push({ kid: j.kid, x: j.x });
+  }
+  return out2;
+}
+async function fetchPublishedKeys(origin, timeoutMs = 5e3) {
+  try {
+    const u = new URL("/v1/keys", origin);
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+    if (u.protocol !== "https:" && !(u.protocol === "http:" && local)) return [];
+    const res = await fetch(u, { signal: AbortSignal.timeout(timeoutMs), redirect: "error" });
+    if (!res.ok) return [];
+    const text = await res.text();
+    if (text.length > MAX_KEYS_BYTES) return [];
+    return parsePublishedKeys(JSON.parse(text));
+  } catch {
+    return [];
+  }
+}
+
+// src/step/results.ts
+import { existsSync as existsSync2, readFileSync as readFileSync6, statSync } from "node:fs";
+import { isAbsolute as isAbsolute4, resolve as resolve4 } from "node:path";
+var MAX_REPORT_BYTES = 64 * 1024 * 1024;
+var UPLOAD_BUDGET = LIMITS.uploadBytes - 64 * 1024;
+var RANK = { skipped: -1, passed: 0, retried: 1, failed: 2 };
+var lines = (s) => s.split("\n").map((x) => x.trim()).filter(Boolean);
+function readStepResults(paths, repo, root, notBefore) {
+  const repoRoot = resolve4(repo).replace(/\\/g, "/").replace(/\/?$/, "/");
+  const prefix = root.replace(/^\.\/?/, "").replace(/\/+$/, "");
+  const reports = [];
+  const byId = /* @__PURE__ */ new Map();
+  for (const p of paths) {
+    const abs = isAbsolute4(p) ? p : resolve4(repo, p);
+    if (!existsSync2(abs)) {
+      reports.push({ path: p, status: "missing", problems: [] });
+      continue;
+    }
+    try {
+      const st = statSync(abs);
+      if (!st.isFile()) throw new Error("not a file");
+      if (st.size > MAX_REPORT_BYTES) throw new Error(`over ${MAX_REPORT_BYTES} bytes`);
+      if (notBefore !== null && st.mtimeMs < notBefore - 1e3) {
+        reports.push({
+          path: p,
+          status: "stale",
+          why: `written ${new Date(st.mtimeMs).toISOString()}, before this job's tests began`,
+          problems: []
+        });
+        continue;
+      }
+      const parsed = parseReport(readFileSync6(abs, "utf8"), { root: repoRoot });
+      for (const r of parsed.tests) {
+        const file = prefix && !r.file.startsWith(prefix + "/") && !r.file.startsWith("/") ? `${prefix}/${r.file}` : r.file;
+        const id = `${file} > ${r.name}`;
+        const had = byId.get(id);
+        if (!had) byId.set(id, { ...r, id, file });
+        else {
+          if (RANK[r.outcome] > RANK[had.outcome]) had.outcome = r.outcome;
+          if (r.durationMs !== void 0) had.durationMs = (had.durationMs ?? 0) + r.durationMs;
+          if (r.retries) had.retries = (had.retries ?? 0) + r.retries;
+        }
+      }
+      reports.push({ path: p, status: "read", format: parsed.format, problems: parsed.problems });
+    } catch (e) {
+      reports.push({ path: p, status: "unreadable", why: e.message.slice(0, 200), problems: [] });
+    }
+  }
+  return { reports, tests: [...byId.values()] };
+}
+var resultsComplete = (r) => r.reports.length > 0 && r.reports.every((x) => x.status === "read" && !x.problems.length);
+var FRAMEWORK = {
+  vitest: "vitest",
+  jest: "jest",
+  "node-test": "node-test",
+  pytest: "pytest"
+};
+function stepEnv(env, d) {
+  const runner = env.RUNNER_OS && env.RUNNER_ARCH ? `${env.RUNNER_OS}/${env.RUNNER_ARCH}` : "?";
+  return envKey(
+    workflowFile2(env.GITHUB_WORKFLOW_REF ?? null),
+    env.GITHUB_JOB || "?",
+    matrixKey(d.matrix),
+    runner
+  );
+}
+function buildUpload(env, d, r, now) {
+  const runId = Number(env.GITHUB_RUN_ID);
+  const attempt = Number(env.GITHUB_RUN_ATTEMPT || 1);
+  if (!Number.isSafeInteger(runId) || runId <= 0 || !Number.isSafeInteger(attempt) || attempt <= 0)
+    return null;
+  if (!env.GITHUB_JOB || !r.reports.some((x) => x.status === "read")) return null;
+  const valid = r.tests.filter(
+    (t) => t.id.length <= LIMITS.testIdChars && t.file.length > 0 && t.file.length <= LIMITS.fileChars && // eslint-disable-next-line no-control-regex
+    !/[\u0000-\u001f\u007f]/.test(t.id + t.file) && t.id.isWellFormed() && t.file.isWellFormed()
+  );
+  let complete = resultsComplete(r) && valid.length === r.tests.length;
+  const totals = { tests: 0, passed: 0, failed: 0, skipped: 0, retried: 0 };
+  for (const t of valid) {
+    totals.tests++;
+    totals[t.outcome]++;
+  }
+  const ordered = [...valid].sort((a, b) => RANK[b.outcome] - RANK[a.outcome]);
+  const tests = [];
+  let bytes = 0;
+  for (const t of ordered) {
+    if (tests.length >= LIMITS.testsPerUpload) break;
+    const ms2 = t.durationMs !== void 0 ? Math.min(Math.round(t.durationMs), LIMITS.durationMs) : void 0;
+    const row = {
+      id: t.id,
+      file: t.file,
+      outcome: t.outcome,
+      ...ms2 !== void 0 && { durationMs: ms2 },
+      ...t.retries ? { retries: t.retries } : {}
+    };
+    bytes += Buffer.byteLength(JSON.stringify(row)) + 1;
+    if (bytes > UPLOAD_BUDGET) break;
+    tests.push(row);
+  }
+  if (tests.length < valid.length) complete = false;
+  const matrix = d.matrix;
+  return {
+    schema: CI_UPLOAD_SCHEMA,
+    version: 1,
+    run: { id: runId, attempt },
+    job: {
+      key: env.GITHUB_JOB.slice(0, LIMITS.jobKeyChars),
+      ...matrix !== void 0 && { matrix },
+      ...env.RUNNER_OS && env.RUNNER_ARCH && { runner: { os: env.RUNNER_OS, arch: env.RUNNER_ARCH } },
+      ...d.checkRunId && { checkRunId: d.checkRunId }
+    },
+    part: "default",
+    partCount: 1,
+    tool: { framework: FRAMEWORK[d.runner] ?? "other", step: "tensile-step@1" },
+    startedAt: d.decidedAt,
+    finishedAt: now.toISOString(),
+    complete,
+    totals,
+    tests
+  };
+}
+async function sendResults(env, sink, upload, opts = {}) {
+  if (!upload) return "skipped";
+  if (/^(false|0|off|no)$/i.test(getInput(env, "upload-results"))) return "skipped";
+  let url;
+  try {
+    url = parseServiceUrl(getInput(env, "service-url"));
+  } catch (e) {
+    sink.warning(`test results not sent: ${e.message}`);
+    return "failed";
+  }
+  if (!url) return "skipped";
+  if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+    sink.warning("test results not sent: no OIDC token (the job needs `permissions: id-token: write`)");
+    return "skipped";
+  }
+  const timeoutMs = opts.timeoutMs ?? 15e3;
+  try {
+    const token = await oidcToken(env, timeoutMs);
+    await call(
+      `POST ${servicePaths.ledgerUploads}`,
+      url.replace(/\/+$/, "") + servicePaths.ledgerUploads,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(upload)
+      },
+      timeoutMs
+    );
+    return "sent";
+  } catch (e) {
+    sink.warning(`test results not sent: ${e.message}`);
+    return "failed";
+  }
+}
+var reportPaths = (env) => lines(getInput(env, "report"));
+
+// src/step/override.ts
+var OVERRIDE_RECORD_SCHEMA = "tensile.quarantine-record";
+var LIST_MAX_AGE_MS = 10 * 6e4;
+var MAX_NAMED = 100;
+function runnerProblems(runner, dirs) {
+  if (runner !== "vitest") return [];
+  for (const dir of dirs) {
+    try {
+      const v = JSON.parse(readFileSync7(join2(dir, "node_modules", "vitest", "package.json"), "utf8")).version;
+      const major = typeof v === "string" ? Number(/^(\d+)\./.exec(v)?.[1]) : NaN;
+      if (!Number.isFinite(major)) return ["the Vitest version is unreadable"];
+      return major >= 5 ? [] : [`Vitest ${String(v)}: its JUnit reporter leaves out unhandled errors before Vitest 5`];
+    } catch {
+    }
+  }
+  return [
+    "Vitest's version can't be read (node_modules/vitest): unhandled errors may be missing from the report"
+  ];
+}
+function decideOverride(x) {
+  const failed = x.results.tests.filter((t) => t.outcome === "failed");
+  const quarantined = [];
+  const notQuarantined = [];
+  const reasons = [];
+  if (x.list.ok) {
+    const byTest = /* @__PURE__ */ new Map();
+    for (const e of x.list.claims.tests)
+      if (e.env === x.env && Date.parse(e.expiresAt) > x.now) byTest.set(e.test, e);
+    for (const t of failed) {
+      const e = byTest.get(t.id);
+      if (e)
+        quarantined.push({ test: t.id, decisionId: e.decisionId, owners: e.owners, expiresAt: e.expiresAt });
+      else notQuarantined.push(t.id);
+    }
+  } else {
+    for (const t of failed) notQuarantined.push(t.id);
+    reasons.push(`no usable quarantine list: ${x.list.reason}`);
+  }
+  const out2 = (verdict) => ({
+    verdict,
+    reasons: verdict === "would_pass" ? [] : reasons,
+    failedCount: failed.length,
+    quarantined,
+    notQuarantined
+  });
+  if (x.testOutcome === "success") return out2("passed");
+  if (x.testOutcome !== "failure")
+    reasons.push(
+      x.testOutcome ? `the test step's outcome is ${x.testOutcome}, not failure` : "no test-outcome input: the step can\u2019t tell the tests failed"
+    );
+  if (x.event !== "pull_request")
+    reasons.push(`a ${x.event || "unknown"} event: only pull requests are ever turned green`);
+  const reports = x.results.reports;
+  if (!reports.length) reasons.push("no test report configured");
+  if (!x.dated) reasons.push("no select-phase decision in this job: the reports can't be dated to this run");
+  for (const p of x.runnerProblems ?? []) reasons.push(p);
+  for (const r of reports) {
+    if (r.status !== "read") reasons.push(`report ${r.path} is ${r.status}${r.why ? ` (${r.why})` : ""}`);
+    else if (r.format !== "junit")
+      reasons.push(
+        `report ${r.path} is ${r.format}: only JUnit XML shows failures outside tests (use the runner's JUnit reporter)`
+      );
+    for (const p of r.problems.slice(0, 3)) reasons.push(`report ${r.path}: ${p}`);
+  }
+  if (!resultsComplete(x.results) && reports.length && !reasons.some((s) => s.startsWith("report ")))
+    reasons.push("the results are incomplete");
+  if (x.testOutcome === "failure" && failed.length === 0)
+    reasons.push(
+      "the test step failed but the report lists no failing test (a crash, or a failure outside the tests)"
+    );
+  if (x.list.ok) {
+    const c = x.list.claims;
+    if (c.ledger.stale) reasons.push("the list was read from a stale ledger");
+    if (!c.ledger.complete) reasons.push("the list was read from a ledger with gaps");
+    if (!c.complete) reasons.push("the list is incomplete");
+  }
+  if (notQuarantined.length && x.list.ok) return out2("stays_red");
+  if (reasons.length) return out2("unknown");
+  if (failed.length > 0 && quarantined.length === failed.length && notQuarantined.length === 0)
+    return out2("would_pass");
+  reasons.push("internal: no failing test matched");
+  return out2("unknown");
+}
+function overrideMode(requested, list3, o) {
+  if (requested !== "enforce") return { requested, mode: "shadow", applied: false, why: null };
+  if (!list3.ok) return { requested, mode: "shadow", applied: false, why: `no usable list: ${list3.reason}` };
+  if (!list3.claims.enforce)
+    return {
+      requested,
+      mode: "shadow",
+      applied: false,
+      why: "the service hasn't enabled the override for this repo (its opt-in or the module's bar)"
+    };
+  return { requested, mode: "enforce", applied: o.verdict === "would_pass", why: null };
+}
+function overrideExit(requested, testOutcome, m) {
+  if (requested !== "enforce") return 0;
+  if (testOutcome === "success") return 0;
+  return m.applied ? 0 : 1;
+}
+async function fetchList(opts) {
+  let signed;
+  try {
+    const path = servicePaths.quarantineList(opts.owner, opts.repo);
+    const res = await call(
+      `GET ${path}`,
+      opts.serviceUrl.replace(/\/+$/, "") + path,
+      { headers: { Authorization: `Bearer ${opts.token}` } },
+      opts.timeoutMs
+    );
+    const text = await res.text();
+    if (text.length > 2 * 1024 * 1024) return { ok: false, reason: "the list is too large" };
+    signed = JSON.parse(text);
+  } catch (e) {
+    return { ok: false, reason: e.message.slice(0, 200) };
+  }
+  const expect = { ...opts.expect, maxAgeMs: LIST_MAX_AGE_MS, now: opts.now };
+  let v = verifyQuarantine(toMapKeys(opts.keys), signed, expect);
+  if (!v.ok && /^unknown signing key/.test(v.reason) && opts.keyOrigin) {
+    const published = await fetchPublishedKeys(opts.keyOrigin);
+    v = verifyQuarantine(toMapKeys([...opts.keys, ...published]), signed, expect);
+  }
+  if (!v.ok) return { ok: false, reason: `unverified: ${v.reason}` };
+  return {
+    ok: true,
+    claims: v.claims,
+    sha256: createHash7("sha256").update(String(signed.claims)).digest("hex")
+  };
+}
+function overrideRecord(env, d, x, o, m, matrixKeyOf2) {
+  return {
+    schema: OVERRIDE_RECORD_SCHEMA,
+    version: 1,
+    run: {
+      id: env.GITHUB_RUN_ID ?? "",
+      attempt: Number(env.GITHUB_RUN_ATTEMPT ?? 1) || 1,
+      job: env.GITHUB_JOB ?? "",
+      matrixKey: matrixKeyOf2(d.matrix)
+    },
+    checkRunId: d.checkRunId,
+    event: x.event,
+    env: x.env,
+    requestedMode: m.requested,
+    mode: m.mode,
+    applied: m.applied,
+    verdict: o.verdict,
+    reasons: o.reasons.slice(0, 20).map((r) => r.slice(0, 300)),
+    testOutcome: x.testOutcome,
+    failed: {
+      count: o.failedCount,
+      tests: x.results.tests.filter((t) => t.outcome === "failed").slice(0, MAX_NAMED).map((t) => t.id.slice(0, 500))
+    },
+    quarantined: o.quarantined.slice(0, MAX_NAMED).map((q) => ({ test: q.test.slice(0, 500), decisionId: q.decisionId })),
+    notQuarantined: {
+      count: o.notQuarantined.length,
+      tests: o.notQuarantined.slice(0, MAX_NAMED).map((t) => t.slice(0, 500))
+    },
+    list: x.list.ok ? {
+      ok: true,
+      reason: null,
+      sha256: x.list.sha256,
+      signedAt: x.list.claims.createdAt,
+      entries: x.list.claims.tests.length,
+      enforce: x.list.claims.enforce
+    } : {
+      ok: false,
+      reason: x.list.reason.slice(0, 300),
+      sha256: null,
+      signedAt: null,
+      entries: 0,
+      enforce: false
+    },
+    reports: x.results.reports.map((r) => ({
+      format: r.format ?? null,
+      status: r.status,
+      problems: r.problems.length
+    })),
+    decidedAt: new Date(x.now).toISOString()
+  };
+}
+function reportOverride(sink, o, m) {
+  if (o.verdict === "passed" && !o.quarantined.length) return;
+  for (const q of o.quarantined.slice(0, 20))
+    sink.warning(
+      `quarantined test failed: ${q.test} (owners: ${q.owners.join(", ") || "none in CODEOWNERS"}; quarantined until ${q.expiresAt}; evidence: decision ${q.decisionId})`
+    );
+  if (o.verdict === "would_pass")
+    sink.log(
+      m.applied ? `Tensile quarantine (enforce): every failure (${o.failedCount}) is a quarantined flaky test; the job passes` : `Tensile quarantine (shadow): every failure (${o.failedCount}) is a quarantined flaky test; enforce would pass the job${m.why ? ` (not enforced: ${m.why})` : ""}`
+    );
+  else if (o.verdict === "stays_red")
+    sink.log(
+      `Tensile quarantine: ${o.notQuarantined.length} failing test(s) aren't quarantined; the job stays red: ${o.notQuarantined.slice(0, 5).join(", ")}`
+    );
+  else if (o.verdict === "unknown")
+    sink.log(`Tensile quarantine: unknown, the exit code is left alone: ${o.reasons.slice(0, 3).join("; ")}`);
+}
+async function sendOverrideRecord(env, sink, record, opts = {}) {
+  let url;
+  try {
+    url = parseServiceUrl(getInput(env, "service-url"));
+  } catch {
+    return "failed";
+  }
+  if (!url || !env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) return "skipped";
+  const timeoutMs = opts.timeoutMs ?? 1e4;
+  try {
+    const token = await oidcToken(env, timeoutMs);
+    await call(
+      `POST ${servicePaths.quarantineRecords}`,
+      url.replace(/\/+$/, "") + servicePaths.quarantineRecords,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(record)
+      },
+      timeoutMs
+    );
+    return "sent";
+  } catch (e) {
+    sink.warning(`quarantine record not sent: ${e.message}`);
+    return "failed";
+  }
+}
+function requestedMode(env) {
+  const v = getInput(env, "quarantine-mode").toLowerCase();
+  if (v === "enforce" || v === "off") return v;
+  return "shadow";
+}
+async function runOverride(env, sink, d, results, deps) {
+  const requested = requestedMode(env);
+  const testOutcome = getInput(env, "test-outcome") || null;
+  const now = (deps.now ?? Date.now)();
+  const fallback = (why) => {
+    const o = {
+      verdict: "unknown",
+      reasons: [why],
+      failedCount: 0,
+      quarantined: [],
+      notQuarantined: []
+    };
+    const m = { requested, mode: "shadow", applied: false, why };
+    return { exit: overrideExit(requested, testOutcome, m), override: o, mode: m, record: null };
+  };
+  if (requested === "off") return fallback("quarantine-mode is off");
+  try {
+    let list3 = { ok: false, reason: "no service-url" };
+    let url = "";
+    try {
+      url = parseServiceUrl(getInput(env, "service-url"));
+    } catch (e) {
+      list3 = { ok: false, reason: e.message };
+    }
+    const repoId = Number(d.repoId);
+    const tenant = Number(d.ownerId);
+    if (url && testOutcome === "failure") {
+      if (!Number.isSafeInteger(repoId) || repoId <= 0 || !Number.isSafeInteger(tenant) || tenant <= 0)
+        list3 = { ok: false, reason: "no repository or owner id in the environment" };
+      else {
+        try {
+          const token = await oidcToken(env, deps.timeoutMs ?? 1e4);
+          const [owner = "", repo = ""] = (env.GITHUB_REPOSITORY ?? "").split("/");
+          list3 = await fetchList({
+            serviceUrl: url,
+            owner,
+            repo,
+            token,
+            expect: { host: d.host, repoId, tenant },
+            keys: deps.keys ?? PINNED_MAP_KEYS,
+            keyOrigin: deps.keyOrigin === void 0 ? KEY_ORIGIN : deps.keyOrigin,
+            now: new Date(now),
+            timeoutMs: deps.timeoutMs ?? 1e4
+          });
+        } catch (e) {
+          list3 = { ok: false, reason: e.message.slice(0, 200) };
+        }
+      }
+    } else if (url) list3 = { ok: false, reason: "not fetched: the tests did not fail" };
+    const input = {
+      event: d.event,
+      testOutcome,
+      results,
+      list: list3,
+      env: stepEnv(env, d),
+      now,
+      dated: deps.dated,
+      runnerProblems: deps.runnerProblems ?? []
+    };
+    const o = decideOverride(input);
+    let m = overrideMode(requested, list3, o);
+    if (deps.shadowOnly && m.mode === "enforce")
+      m = { requested, mode: "shadow", applied: false, why: deps.shadowOnly };
+    reportOverride(sink, o, m);
+    const record = overrideRecord(env, d, input, o, m, deps.matrixKeyOf);
+    return { exit: overrideExit(requested, testOutcome, m), override: o, mode: m, record };
+  } catch (e) {
+    return fallback(`internal error: ${e.message}`);
+  }
+}
 
 // src/step/records.ts
 var DECISION_SCHEMA = "tensile.selection-decision";
@@ -10213,7 +11453,10 @@ function ledgerDecision(d) {
       skipped: d.skipped.length
     },
     skippedSha256: sha2562(d.skipped.join("\n")),
-    selectedSha256: sha2562(selected.join("\n"))
+    selectedSha256: sha2562(selected.join("\n")),
+    // Sharding (docs/design/sharding.md): this leg's shard, and the projection, labelled as one.
+    ...d.shard && { shard: d.shard },
+    ...d.shardProjection && { shardProjection: d.shardProjection }
   };
   const withLists = { ...base3, ...lists, listsComplete: true };
   const proposed = Buffer.byteLength(JSON.stringify(withLists)) <= MAX_PROPOSED_BYTES ? withLists : { ...base3, selected: null, sampled: null, listsComplete: false };
@@ -10381,30 +11624,38 @@ function renderOutcome(d, o) {
     );
   else out2.push(`Unknown: ${esc2(o.note ?? "not enough evidence")}.`, "");
   out2.push(`Verdict \`${o.verdict}\` (${o.kind}), recorded for the ledger.`, "");
+  const p = d.shardProjection;
+  if (p && p.auto.n > 1) {
+    const min = (s) => `${Math.round(s / 60 * 10) / 10} min`;
+    out2.push(
+      `Sharding (projection from this run's ${p.files} test files, not a measured run): with ${p.auto.n} shards, feedback in about ${min(p.auto.wallSeconds)} instead of ${min(p.unsharded.wallSeconds)}, ${p.auto.billedMinutes} billed minutes instead of ${p.unsharded.billedMinutes} (${p.setupSeconds} s of setup per job assumed).`,
+      ""
+    );
+  }
   return cap2(out2.join("\n"));
 }
 
 // src/step/outcome.ts
-var MAX_REPORT_BYTES = 64 * 1024 * 1024;
-var recordPath = (decisionFile) => join2(dirname3(decisionFile), "selection-record.json");
+var MAX_REPORT_BYTES2 = 64 * 1024 * 1024;
+var recordPath = (decisionFile) => join3(dirname3(decisionFile), "selection-record.json");
 function readDecision(file) {
-  const d = JSON.parse(readFileSync5(file, "utf8"));
+  const d = JSON.parse(readFileSync8(file, "utf8"));
   if (d?.schema !== DECISION_SCHEMA || d.version !== 1)
     throw new Error(`${file} is not a selection decision`);
   return d;
 }
 function readReports(paths, repo, root) {
-  const hash = createHash5("sha256");
+  const hash = createHash8("sha256");
   const failed = /* @__PURE__ */ new Set();
   const seen = /* @__PURE__ */ new Set();
   let any = false;
-  const repoRoot = resolve3(repo).replace(/\\/g, "/").replace(/\/?$/, "/");
+  const repoRoot = resolve5(repo).replace(/\\/g, "/").replace(/\/?$/, "/");
   const prefix = root.replace(/^\.\/?/, "").replace(/\/+$/, "");
   for (const p of paths) {
-    const abs = isAbsolute3(p) ? p : resolve3(repo, p);
-    if (!existsSync(abs)) continue;
-    if (statSync(abs).size > MAX_REPORT_BYTES) throw new Error(`${p} is over ${MAX_REPORT_BYTES} bytes`);
-    const buf = readFileSync5(abs);
+    const abs = isAbsolute5(p) ? p : resolve5(repo, p);
+    if (!existsSync3(abs)) continue;
+    if (statSync2(abs).size > MAX_REPORT_BYTES2) throw new Error(`${p} is over ${MAX_REPORT_BYTES2} bytes`);
+    const buf = readFileSync8(abs);
     hash.update(buf);
     for (const r of parseResults(buf.toString("utf8"), { root: repoRoot })) {
       const file = prefix && !r.file.startsWith(prefix + "/") && !r.file.startsWith("/") ? `${prefix}/${r.file}` : r.file;
@@ -10416,7 +11667,41 @@ function readReports(paths, repo, root) {
   if (!any) return null;
   return { tests: { failed: [...failed].sort(), seen: [...seen].sort() }, sha256: hash.digest("hex") };
 }
-var lines = (s) => s.split("\n").map((x) => x.trim()).filter(Boolean);
+function reportDurations(paths, repo) {
+  const files = /* @__PURE__ */ new Map();
+  let start2 = Infinity;
+  let end = -Infinity;
+  for (const p of paths) {
+    const abs = isAbsolute5(p) ? p : resolve5(repo, p);
+    if (!existsSync3(abs) || statSync2(abs).size > MAX_REPORT_BYTES2) continue;
+    const text = readFileSync8(abs, "utf8");
+    if (!text.trimStart().startsWith("{")) continue;
+    let json;
+    try {
+      json = JSON.parse(text);
+      if (!Array.isArray(json.testResults)) continue;
+      for (const [f, s] of parseDurations(text, repo)) files.set(f, (files.get(f) ?? 0) + s);
+    } catch {
+      continue;
+    }
+    for (const t of json.testResults) {
+      if (typeof t.startTime === "number" && Number.isFinite(t.startTime))
+        start2 = Math.min(start2, t.startTime);
+      if (typeof t.endTime === "number" && Number.isFinite(t.endTime)) end = Math.max(end, t.endTime);
+    }
+  }
+  if (!files.size) return null;
+  return { files, wallSeconds: end > start2 ? (end - start2) / 1e3 : null };
+}
+function shardProjectionFor(env, d, reports, repo) {
+  if (d.shard) return null;
+  const r = reportDurations(reports, repo);
+  if (!r) return null;
+  const raw2 = Number(getInput(env, "shard-setup-seconds") || "60");
+  const setupSeconds = Number.isFinite(raw2) && raw2 >= 0 && raw2 <= 86400 ? raw2 : 60;
+  return projectSharding(r.files, { wallSeconds: r.wallSeconds, setupSeconds });
+}
+var lines2 = (s) => s.split("\n").map((x) => x.trim()).filter(Boolean);
 function runOutcomePhase(env, sink, decisionFile) {
   let d;
   try {
@@ -10429,11 +11714,16 @@ function runOutcomePhase(env, sink, decisionFile) {
   const testOutcome = getInput(env, "test-outcome") || null;
   let report = null;
   try {
-    report = readReports(lines(getInput(env, "report")), repo, d.root);
+    report = readReports(lines2(getInput(env, "report")), repo, d.root);
   } catch (e) {
     sink.warning(`test report unreadable: ${e.message}`);
   }
   const outcome = judge(d, report?.tests ?? null, testOutcome, report?.sha256 ?? null);
+  try {
+    d.shardProjection = shardProjectionFor(env, d, lines2(getInput(env, "report")), repo);
+  } catch (e) {
+    sink.warning(`no sharding projection: ${e.message}`);
+  }
   const record = selectionRecord(d, [outcome]);
   const out2 = recordPath(decisionFile);
   try {
@@ -10461,8 +11751,81 @@ function runOutcomePhase(env, sink, decisionFile) {
 function runPost(env, sink) {
   const decisionFile = env.STATE_decision;
   if (!decisionFile || !getInput(env, "report")) return null;
-  if (existsSync(recordPath(decisionFile))) return null;
+  if (existsSync3(recordPath(decisionFile))) return null;
   return runOutcomePhase(env, sink, decisionFile);
+}
+function jobFacts(env, decisionFile) {
+  try {
+    const d = readDecision(decisionFile);
+    const at = Date.parse(d.decidedAt);
+    return { d, dated: Number.isFinite(at), sharded: Boolean(d.shard) || getInput(env, "shard") !== "" };
+  } catch {
+  }
+  let matrix;
+  try {
+    const raw2 = getInput(env, "matrix-key");
+    if (raw2) {
+      const v = JSON.parse(raw2);
+      if (v === null || typeof v === "object" && !Array.isArray(v)) matrix = v;
+    }
+  } catch {
+    matrix = void 0;
+  }
+  const crid = getInput(env, "check-run-id");
+  const runner = getInput(env, "runner") || "vitest";
+  let host = "";
+  try {
+    host = new URL(env.GITHUB_SERVER_URL || "https://github.com").host.toLowerCase();
+  } catch {
+    host = "";
+  }
+  return {
+    d: {
+      ...matrix !== void 0 && { matrix },
+      checkRunId: /^\d{1,19}$/.test(crid) ? Number(crid) : null,
+      event: env.GITHUB_EVENT_NAME ?? "",
+      host,
+      repoId: env.GITHUB_REPOSITORY_ID ?? "",
+      ownerId: env.GITHUB_REPOSITORY_OWNER_ID ?? "",
+      runner,
+      root: getInput(env, "root"),
+      decidedAt: (/* @__PURE__ */ new Date()).toISOString()
+    },
+    dated: false,
+    // Any shard input, even one that doesn't parse, makes this a sharded leg: it never applies the override.
+    sharded: getInput(env, "shard") !== ""
+  };
+}
+async function runResultsAndOverride(env, sink, decisionFile, opts) {
+  const enforcing = opts.canEnforce && requestedMode(env) === "enforce";
+  const testOutcome = getInput(env, "test-outcome") || null;
+  const failClosed = enforcing && testOutcome !== "success" ? 1 : 0;
+  try {
+    const { d, dated, sharded } = jobFacts(env, decisionFile);
+    const repo = getInput(env, "working-directory") || env.GITHUB_WORKSPACE || ".";
+    const results = readStepResults(reportPaths(env), repo, d.root, dated ? Date.parse(d.decidedAt) : null);
+    await sendResults(env, sink, buildUpload(env, d, results, /* @__PURE__ */ new Date()));
+    const r = await runOverride(env, sink, d, results, {
+      ...opts.deps,
+      matrixKeyOf: matrixKey,
+      dated,
+      runnerProblems: runnerProblems(d.runner, [resolve5(repo, d.root || "."), resolve5(repo)]),
+      shadowOnly: sharded ? "a sharded leg never applies the override (docs/design/sharding.md)" : null
+    });
+    if (r.record) await sendOverrideRecord(env, sink, r.record);
+    if (!opts.canEnforce) return 0;
+    if (r.exit !== 0)
+      process.stdout.write(
+        `::error title=Tensile::the tests failed${r.override.reasons.length ? ` (${escapeCommand(r.override.reasons[0])})` : ""}; quarantine-mode enforce keeps the job red
+`
+      );
+    return r.exit;
+  } catch (e) {
+    sink.warning(
+      `quarantine override: internal error, the job's result is left as the tests left it: ${e.message}`
+    );
+    return failClosed;
+  }
 }
 var RECORD_UPLOAD_PATH = "/v1/ledger/selection-records";
 async function sendRecord(env, sink, record, opts = {}) {
@@ -10502,125 +11865,8 @@ async function sendRecord(env, sink, record, opts = {}) {
 }
 
 // src/step/select.ts
-import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname4, join as join3, resolve as resolve4 } from "node:path";
-
-// ../ledger/src/signing.ts
-import {
-  createHash as createHash6,
-  createPrivateKey,
-  createPublicKey,
-  sign as edSign,
-  verify as edVerify
-} from "node:crypto";
-var MAP_FORMAT = "jiffy.map.gz/1";
-var MAP_CLAIMS_VERSION = 1;
-var KID = /^[A-Za-z0-9_.-]{1,64}$/;
-function mapPublicKey(kid, key) {
-  if (!KID.test(kid)) throw new Error("map key id must be 1-64 of [A-Za-z0-9_.-]");
-  let k;
-  if (typeof key === "object") k = createPublicKey({ key: { ...key }, format: "jwk" });
-  else if (key.trim().startsWith("-----")) k = createPublicKey(key.trim());
-  else k = createPublicKey({ key: Buffer.from(key.trim(), "base64"), format: "der", type: "spki" });
-  if (k.asymmetricKeyType !== "ed25519") throw new Error(`map key ${kid} is not an Ed25519 key`);
-  return { kid, publicKey: k };
-}
-function mapSha256(bytes) {
-  return createHash6("sha256").update(bytes).digest("hex");
-}
-var MAX_CLAIMS_CHARS = 4096;
-var HEX40 = /^[0-9a-f]{40}$/;
-var HEX64 = /^[0-9a-f]{64}$/;
-function verifyMap(keys, signed, expect) {
-  const no = (reason) => ({ ok: false, reason });
-  if (!signed || typeof signed !== "object") return no("no signature");
-  const { claims: text, signature } = signed;
-  if (typeof text !== "string" || typeof signature !== "string") return no("no signature");
-  if (text.length > MAX_CLAIMS_CHARS || signature.length > 200) return no("signature too large");
-  let c;
-  try {
-    c = JSON.parse(text);
-  } catch {
-    return no("claims are not JSON");
-  }
-  if (!c || typeof c !== "object" || Array.isArray(c)) return no("claims are not an object");
-  if (c.v !== MAP_CLAIMS_VERSION) return no(`claims version ${String(c.v)} is not ${MAP_CLAIMS_VERSION}`);
-  if (canonicalJson(c) !== text) return no("claims are not canonical");
-  const key = keys.find((k) => k.kid === c.kid);
-  if (!key) return no(`unknown signing key ${String(c.kid)}`);
-  let good = false;
-  try {
-    good = edVerify(null, Buffer.from(text), key.publicKey, Buffer.from(signature, "base64url"));
-  } catch {
-    good = false;
-  }
-  if (!good) return no("bad signature");
-  if (typeof c.host !== "string" || c.host.toLowerCase() !== expect.host.toLowerCase())
-    return no(`map is for host ${String(c.host)}, not ${expect.host}`);
-  if (c.repoId !== expect.repoId) return no(`map is for repo ${String(c.repoId)}, not ${expect.repoId}`);
-  if (expect.tenant !== void 0 && c.tenant !== expect.tenant) return no("map is for another tenant");
-  if (typeof c.sha !== "string" || !HEX40.test(c.sha)) return no("map commit is not a sha");
-  if (expect.sha !== void 0 && c.sha !== expect.sha) return no(`map is for ${c.sha}, not ${expect.sha}`);
-  if (typeof c.mapSha256 !== "string" || !HEX64.test(c.mapSha256)) return no("map hash is not a sha256");
-  if (expect.mapSha256 !== void 0 && c.mapSha256 !== expect.mapSha256)
-    return no("map bytes do not match the signed hash");
-  if (c.format !== MAP_FORMAT) return no(`map format ${String(c.format)} is not ${MAP_FORMAT}`);
-  const at = Date.parse(c.createdAt);
-  if (!Number.isFinite(at)) return no("map has no signing time");
-  const now = (expect.now ?? /* @__PURE__ */ new Date()).getTime();
-  if (at > now + 6e4) return no("map signing time is in the future");
-  if (expect.maxAgeMs !== void 0 && now - at > expect.maxAgeMs)
-    return no(
-      `map signed ${Math.round((now - at) / 1e3)}s ago, over the ${Math.round(expect.maxAgeMs / 1e3)}s bound`
-    );
-  return { ok: true, claims: c };
-}
-
-// src/step/keys.ts
-var PINNED_MAP_KEYS = Object.freeze([]);
-var KEY_ORIGIN = "https://jiffy-app-production.up.railway.app";
-var KID2 = /^[A-Za-z0-9_.-]{1,64}$/;
-var X = /^[A-Za-z0-9_-]{43}$/;
-var MAX_KEYS_BYTES = 64 * 1024;
-function toMapKeys(keys) {
-  const out2 = [];
-  for (const k of keys) {
-    if (!KID2.test(k.kid) || !X.test(k.x)) continue;
-    try {
-      out2.push(mapPublicKey(k.kid, { kty: "OKP", crv: "Ed25519", x: k.x }));
-    } catch {
-    }
-  }
-  return out2;
-}
-function parsePublishedKeys(json) {
-  const keys = json && typeof json === "object" ? json.keys : void 0;
-  if (!Array.isArray(keys)) return [];
-  const out2 = [];
-  for (const k of keys.slice(0, 32)) {
-    if (!k || typeof k !== "object") continue;
-    const j = k;
-    if (j.kty !== "OKP" || j.crv !== "Ed25519") continue;
-    if (j.status !== "active" && j.status !== "verify") continue;
-    if (typeof j.kid !== "string" || typeof j.x !== "string" || !KID2.test(j.kid) || !X.test(j.x)) continue;
-    out2.push({ kid: j.kid, x: j.x });
-  }
-  return out2;
-}
-async function fetchPublishedKeys(origin, timeoutMs = 5e3) {
-  try {
-    const u = new URL("/v1/keys", origin);
-    const local = ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
-    if (u.protocol !== "https:" && !(u.protocol === "http:" && local)) return [];
-    const res = await fetch(u, { signal: AbortSignal.timeout(timeoutMs), redirect: "error" });
-    if (!res.ok) return [];
-    const text = await res.text();
-    if (text.length > MAX_KEYS_BYTES) return [];
-    return parsePublishedKeys(JSON.parse(text));
-  } catch {
-    return [];
-  }
-}
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname4, join as join4, resolve as resolve6 } from "node:path";
 
 // src/step/native.ts
 var RUNNERS = ["vitest", "jest", "node-test", "pytest"];
@@ -10669,8 +11915,8 @@ function nativeArgs(runner, root, tests) {
 }
 
 // src/step/select.ts
-var lines2 = (s) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
-function num(name2, raw2, dflt, min, integer = false) {
+var lines3 = (s) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+function num2(name2, raw2, dflt, min, integer = false) {
   if (!raw2) return dflt;
   const n = Number(raw2);
   if (!Number.isFinite(n) || n < min || integer && !Number.isInteger(n))
@@ -10686,9 +11932,9 @@ function defaultPolicyFiles(env) {
   return out2;
 }
 function decisionPath(env) {
-  return resolve4(
+  return resolve6(
     process.cwd(),
-    getInput(env, "decision-file") || join3(env.RUNNER_TEMP || ".tensile", "tensile", "selection-decision.json")
+    getInput(env, "decision-file") || join4(env.RUNNER_TEMP || ".tensile", "tensile", "selection-decision.json")
   );
 }
 function parseStepInputs(env) {
@@ -10719,14 +11965,14 @@ function parseStepInputs(env) {
     map,
     mapSignature: getInput(env, "map-signature") || (map ? `${map}.sig.json` : ""),
     serviceUrl: parseServiceUrl(getInput(env, "service-url")),
-    testPaths: lines2(getInput(env, "test-paths")),
-    always: lines2(getInput(env, "always")),
-    policyFiles: [...defaultPolicyFiles(env), ...lines2(getInput(env, "policy-files"))],
+    testPaths: lines3(getInput(env, "test-paths")),
+    always: lines3(getInput(env, "always")),
+    policyFiles: [...defaultPolicyFiles(env), ...lines3(getInput(env, "policy-files"))],
     durations: getInput(env, "durations"),
     history: getInput(env, "history"),
-    maxMapCommits: num("max-map-commits", getInput(env, "max-map-commits"), 200, 0, true),
-    maxMapAgeDays: num("max-map-age-days", getInput(env, "max-map-age-days"), 14, 0),
-    timeoutSeconds: num("timeout-seconds", getInput(env, "timeout-seconds"), 60, 1),
+    maxMapCommits: num2("max-map-commits", getInput(env, "max-map-commits"), 200, 0, true),
+    maxMapAgeDays: num2("max-map-age-days", getInput(env, "max-map-age-days"), 14, 0),
+    timeoutSeconds: num2("timeout-seconds", getInput(env, "timeout-seconds"), 60, 1),
     sampleRate: (() => {
       try {
         return parseRate(getInput(env, "sample-rate") || "5%");
@@ -10744,8 +11990,46 @@ function parseStepInputs(env) {
       return Number(raw2);
     })(),
     testStep: getInput(env, "test-step"),
-    ...matrix !== void 0 && { matrix }
+    ...matrix !== void 0 && { matrix },
+    shard: (() => {
+      const raw2 = getInput(env, "shard");
+      if (!raw2) return null;
+      try {
+        const { index, total } = parseShardLabel(raw2);
+        return { label: `${index + 1}/${total}`, index, total };
+      } catch (e) {
+        throw new InputError(`input ${e.message}`);
+      }
+    })()
   };
+}
+function stepShard(inputs, tests, durations) {
+  if (!inputs.shard) return void 0;
+  const { label, index, total } = inputs.shard;
+  let wouldRun = null;
+  if (tests) {
+    const plan = planShards(tests, { history: durations }, { shards: total });
+    const mine = plan.shards[index]?.tests ?? [];
+    wouldRun = {
+      files: mine.length,
+      sha256: sha2562(mine.join("\n")),
+      digest: plan.digest,
+      basis: plan.basis,
+      seconds: plan.shards[index]?.seconds ?? 0
+    };
+  }
+  return { label, index, total, args: nativeShardArgs(inputs.runner, label), wouldRun };
+}
+function readDurations(inputs) {
+  if (!inputs.durations) return /* @__PURE__ */ new Map();
+  try {
+    return parseDurations(
+      readFileSync9(resolve6(process.cwd(), inputs.durations), "utf8"),
+      inputs.workingDirectory
+    );
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
 }
 var ARGS_BUDGET = 200 * 1024;
 function baseDecision(env, inputs, event) {
@@ -10823,7 +12107,17 @@ async function decideStep(env, deps) {
     decision2.runAll = true;
     decision2.mode = "shadow";
     decision2.timings.stepMs = Math.round(performance.now() - start2);
-    return { decision: decision2, runAll: true, args: "", files: [], skip: false, warnings };
+    const shard2 = inputs ? stepShard(inputs, null, /* @__PURE__ */ new Map()) : void 0;
+    if (shard2) decision2.shard = shard2;
+    return {
+      decision: decision2,
+      runAll: true,
+      args: "",
+      files: [],
+      skip: false,
+      shardArgs: shard2?.args ?? "",
+      warnings
+    };
   };
   if (killSwitch(env)) return full("kill switch is on (run-all input or JIFFY_RUN_ALL)");
   try {
@@ -10932,17 +12226,36 @@ async function decideStep(env, deps) {
       );
     why.push(...blockers.filter((b) => b !== "nothing is skipped" && b !== "selection runs everything"));
   }
+  if (inputs.mode === "enforce" && inputs.shard)
+    why.push(
+      "the legs of a sharded job can't yet show they planned the same split (docs/design/sharding.md): use a planning job's matrix to enforce"
+    );
+  const shard = stepShard(
+    inputs,
+    decision.runAll ? null : [...w.selected.map((s) => s.test), ...w.sampled],
+    readDurations(inputs)
+  );
+  if (shard) decision.shard = shard;
   decision.mode = why.length ? "shadow" : "enforce";
   decision.modeReason = inputs.mode === "enforce" && why.length ? why.join("; ") : null;
   decision.timings.stepMs = Math.round(performance.now() - start2);
   if (decision.mode !== "enforce" || decision.runAll)
-    return { decision, runAll: true, args: "", files: [], skip: false, warnings };
+    return {
+      decision,
+      runAll: true,
+      args: "",
+      files: [],
+      skip: false,
+      shardArgs: shard?.args ?? "",
+      warnings
+    };
   return {
     decision,
     runAll: false,
     args: list3.args,
     files: list3.files,
     skip: list3.files.length === 0,
+    shardArgs: "",
     warnings
   };
 }
@@ -10955,6 +12268,8 @@ function writeStepOutputs(sink, r, decisionFile) {
     ["count", String(r.files.length)],
     ["skip", String(r.skip)],
     ["decision-file", decisionFile],
+    // Only with run-all: a selected list is already this job's whole share.
+    ["shard-args", r.runAll ? r.shardArgs : ""],
     ["run-all", String(r.runAll)]
   ]);
 }
@@ -10965,7 +12280,7 @@ async function runSelectPhase(env, sink, deps) {
   } catch (e) {
     const decision = baseDecision(env, null, {});
     decision.reasons = [`internal error: ${e.message}`];
-    r = { decision, runAll: true, args: "", files: [], skip: false, warnings: [] };
+    r = { decision, runAll: true, args: "", files: [], skip: false, shardArgs: "", warnings: [] };
   }
   let file = "";
   try {
@@ -10994,9 +12309,9 @@ async function runSelectPhase(env, sink, deps) {
 }
 
 // src/upload.ts
-import { createHash as createHash7 } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync as readFileSync6 } from "node:fs";
-import { basename, join as join4 } from "node:path";
+import { createHash as createHash9 } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync as readFileSync10 } from "node:fs";
+import { basename, join as join5 } from "node:path";
 var MAX_ARTIFACTS = 200;
 var TIMEOUT_MS = 3e4;
 var RETRIES = [1e3, 4e3];
@@ -11010,7 +12325,7 @@ function findEvidenceFiles(dir) {
     return { files, skipped };
   }
   if (names2.length === 1 && names2[0].startsWith(EVIDENCE_PREFIX) && names2[0].endsWith(".json")) {
-    const f = join4(dir, names2[0]);
+    const f = join5(dir, names2[0]);
     try {
       const fst = lstatSync(f);
       if (fst.isFile()) {
@@ -11023,7 +12338,7 @@ function findEvidenceFiles(dir) {
   }
   for (const name2 of names2) {
     if (!name2.startsWith(EVIDENCE_PREFIX)) continue;
-    const art = join4(dir, name2);
+    const art = join5(dir, name2);
     let st;
     try {
       st = lstatSync(art);
@@ -11052,7 +12367,7 @@ function findEvidenceFiles(dir) {
       );
       continue;
     }
-    const f = join4(art, want);
+    const f = join5(art, want);
     let fst;
     try {
       fst = lstatSync(f);
@@ -11168,7 +12483,7 @@ async function runUpload(env, opts = {}) {
     const name2 = basename(f);
     let text;
     try {
-      text = readFileSync6(f, "utf8");
+      text = readFileSync10(f, "utf8");
     } catch (e) {
       results.push({
         file: name2,
@@ -11178,7 +12493,7 @@ async function runUpload(env, opts = {}) {
       continue;
     }
     if (expected) {
-      const sha = createHash7("sha256").update(text).digest("hex");
+      const sha = createHash9("sha256").update(text).digest("hex");
       if (!expected.has(sha)) {
         results.push({
           file: name2,
@@ -11223,13 +12538,13 @@ async function runUpload(env, opts = {}) {
 }
 var cell = (s) => s.replace(/[|\r\n]/g, " ");
 function uploadSummary(o) {
-  const lines3 = ["## Jiffy evidence upload", "", `${o.reason}.`, ""];
+  const lines4 = ["## Jiffy evidence upload", "", `${o.reason}.`, ""];
   if (o.results.length) {
-    lines3.push("| File | Result |", "| --- | --- |");
-    for (const r of o.results) lines3.push(`| ${cell(r.file)} | ${r.ok ? "\u2713" : "\u2717"} ${cell(r.detail)} |`);
-    lines3.push("");
+    lines4.push("| File | Result |", "| --- | --- |");
+    for (const r of o.results) lines4.push(`| ${cell(r.file)} | ${r.ok ? "\u2713" : "\u2717"} ${cell(r.detail)} |`);
+    lines4.push("");
   }
-  return lines3.join("\n");
+  return lines4.join("\n");
 }
 async function mainUpload(env, sink) {
   let o;
@@ -11251,209 +12566,9 @@ async function mainUpload(env, sink) {
 // src/worker.ts
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 
-// src/decide.ts
-import { existsSync as existsSync2, readFileSync as readFileSync7 } from "node:fs";
-import { isAbsolute as isAbsolute4, resolve as resolve5 } from "node:path";
-var isUrl = (s) => /^https?:\/\//i.test(s);
-async function readSource(src, cwd) {
-  if (isUrl(src)) {
-    const res = await fetch(src);
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-    return Buffer.from(await res.arrayBuffer());
-  }
-  const p = isAbsolute4(src) ? src : resolve5(cwd, src);
-  if (!existsSync2(p)) throw new Error("file not found");
-  return readFileSync7(p);
-}
-async function loadMap(from, { cwd, now, maxAgeDays }) {
-  if (!from) return { map: null, info: null, problem: "no coverage map configured" };
-  const src = typeof from === "string" ? from : from.label;
-  let raw2;
-  let map;
-  try {
-    raw2 = typeof from === "string" ? await readSource(from, cwd) : await from.read();
-  } catch (e) {
-    return { map: null, info: null, problem: `cannot read coverage map ${src}: ${e.message}` };
-  }
-  try {
-    map = decodeMap(raw2);
-  } catch (e) {
-    return { map: null, info: null, problem: `cannot decode coverage map ${src}: ${e.message}` };
-  }
-  const { commit, createdAt } = map.meta;
-  const info2 = {
-    source: src,
-    bytes: raw2.length,
-    tests: map.tests.size,
-    ...typeof commit === "string" && { commit },
-    ...typeof createdAt === "string" && { createdAt }
-  };
-  if (!map.tests.size) return { map: null, info: info2, problem: "coverage map has no tests" };
-  if (maxAgeDays > 0) {
-    const at = typeof createdAt === "string" ? Date.parse(createdAt) : NaN;
-    if (Number.isNaN(at))
-      return { map: null, info: info2, problem: "coverage map has no createdAt, so its age is unknown" };
-    const days = (now - at) / 864e5;
-    if (days > maxAgeDays)
-      return {
-        map: null,
-        info: info2,
-        problem: `coverage map is stale: recorded ${days.toFixed(1)} days ago (max-map-age-days ${maxAgeDays})`
-      };
-  }
-  return { map, info: info2, problem: null };
-}
-var slashes2 = (p) => p.replace(/\\/g, "/");
-function parseDurations(text, repo) {
-  const json = JSON.parse(text);
-  if (json && typeof json === "object" && Array.isArray(json.testResults)) {
-    const report = json;
-    const root = slashes2(repo).replace(/\/?$/, "/");
-    return durationsFromReport(
-      { testResults: report.testResults.map((t) => ({ ...t, name: slashes2(t.name) })) },
-      root
-    );
-  }
-  if (json && typeof json === "object" && !Array.isArray(json)) {
-    const out2 = /* @__PURE__ */ new Map();
-    for (const [k, v] of Object.entries(json)) {
-      if (typeof v !== "number" || !Number.isFinite(v) || v < 0)
-        throw new Error(`durations: ${k} is not a number of seconds`);
-      out2.set(slashes2(k), v);
-    }
-    return out2;
-  }
-  throw new Error("durations must be a Vitest/Jest JSON report or a {file: seconds} object");
-}
-function resolveBase(repo, candidates) {
-  const tried = [];
-  for (const c of candidates) {
-    try {
-      git(repo, ["rev-parse", "--verify", "--quiet", `${c}^{commit}`]);
-    } catch {
-      tried.push(c);
-      continue;
-    }
-    return { base: mergeBase(repo, c, "HEAD"), from: c };
-  }
-  throw new Error(
-    `cannot resolve a base (tried ${tried.join(", ")}); check out with fetch-depth: 0 so the base is present`
-  );
-}
-function missingAt(repo, rev, paths) {
-  const ok = paths.filter((p) => !p.includes("\n"));
-  if (!ok.length) return [];
-  const lines3 = git(
-    repo,
-    ["cat-file", "--batch-check"],
-    ok.map((p) => `${rev}:${p}`).join("\n") + "\n"
-  ).split("\n");
-  return ok.filter((_, i2) => !/^[0-9a-f]+ blob \d+$/.test(lines3[i2] ?? ""));
-}
-function checkHead(repo, head, expect) {
-  const want = expect.toLowerCase();
-  if (head === want) return;
-  const parents = git(repo, ["rev-list", "--parents", "-n", "1", head]).trim().split(" ").slice(1);
-  if (parents.length > 1 && parents.includes(want)) return;
-  throw new Error(
-    `HEAD ${head.slice(0, 10)} is not the pull request's head ${want.slice(0, 10)} or a merge of it (pull_request_target checks out the base unless told otherwise)`
-  );
-}
-function testsAddedSince(repo, since, head) {
-  const out2 = git(repo, ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", since, head]);
-  return out2.split("\0").filter((p) => p && classify(p) === "test");
-}
-var resolves = (repo, rev) => {
-  try {
-    git(repo, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
-    return true;
-  } catch {
-    return false;
-  }
-};
-async function decide(input) {
-  const { repo, service } = input;
-  const t0 = performance.now();
-  const head = git(repo, ["rev-parse", "HEAD"]).trim();
-  if (input.expectHead) checkHead(repo, head, input.expectHead);
-  const { base: base3, from } = resolveBase(repo, input.baseCandidates);
-  if (base3 === head)
-    throw new Error(`HEAD is the base (${head.slice(0, 10)}): there is no change to compare`);
-  const t1 = performance.now();
-  const source = !input.map && service ? {
-    label: `${service.target.url} (map before ${base3.slice(0, 10)})`,
-    read: () => fetchMap(service.target, service.token, base3)
-  } : input.map;
-  const loaded = await loadMap(source, {
-    cwd: process.cwd(),
-    now: input.now,
-    maxAgeDays: input.maxMapAgeDays
-  });
-  const { info: info2 } = loaded;
-  let { map, problem } = loaded;
-  let durations = null;
-  if (input.durations) {
-    const p = isAbsolute4(input.durations) ? input.durations : resolve5(process.cwd(), input.durations);
-    durations = parseDurations(readFileSync7(p, "utf8"), repo);
-  }
-  let added = [];
-  if (map) {
-    const commit = map.meta.commit;
-    if (typeof commit !== "string" || !commit) {
-      problem = "coverage map has no commit, so tests added since it was recorded are unknown";
-    } else if (!resolves(repo, commit)) {
-      problem = `coverage map commit ${commit.slice(0, 10)} is not in this checkout (check out with fetch-depth: 0)`;
-    } else added = testsAddedSince(repo, commit, head);
-    if (problem) map = null;
-  }
-  const t2 = performance.now();
-  const alwaysRun = map ? mapAlwaysRun(map) ?? [] : [];
-  const knownTests = /* @__PURE__ */ new Set([
-    ...map?.tests.keys() ?? [],
-    ...alwaysRun,
-    ...durations?.keys() ?? [],
-    ...added
-  ]);
-  const changes = changesFromGit(repo, base3, head, { knownTests });
-  const t3 = performance.now();
-  const allTests = knownTests;
-  const prefixes = input.always ?? [];
-  const always = prefixes.length ? (t) => prefixes.some((p) => t.startsWith(p)) : void 0;
-  const selection = select({ changes, map, allTests, always });
-  const t4 = performance.now();
-  const quarantined = new Set(input.quarantined ?? []);
-  const missing = new Set(
-    missingAt(repo, head, [.../* @__PURE__ */ new Set([...selection.tests.keys(), ...selection.skipped, ...quarantined])])
-  );
-  const gone = [...selection.tests.keys()].filter((t) => missing.has(t));
-  const present = selection.skipped.filter((t) => !missing.has(t) && !quarantined.has(t));
-  const sampled = selection.runAll ? [] : sampleOrder(present, head).slice(0, sampleSize(input.sampleRate, present.length)).sort();
-  const known = /* @__PURE__ */ new Set([...selection.tests.keys(), ...selection.skipped]);
-  const edited = input.quarantineFile && changes.files.some((f) => f.path === input.quarantineFile) ? input.quarantineFile : null;
-  const quarantinePresent = edited ? [] : [...quarantined].filter((t) => known.has(t) && !missing.has(t) && !changes.changedTests.has(t)).sort();
-  const quarantineIgnored = edited ? `the change edits the quarantine list ${edited}` : null;
-  const t5 = performance.now();
-  const ms2 = (a, b) => Math.round((b - a) * 10) / 10;
-  return {
-    base: base3,
-    baseFrom: from,
-    head,
-    map: info2,
-    mapProblem: problem,
-    durations,
-    changes,
-    selection,
-    gone,
-    sampled,
-    quarantinePresent,
-    quarantineIgnored,
-    timings: { mapMs: ms2(t1, t2), diffMs: ms2(t0, t1) + ms2(t2, t3) + ms2(t4, t5), selectMs: ms2(t3, t4) }
-  };
-}
-
 // src/step/work.ts
-import { existsSync as existsSync3, readFileSync as readFileSync8, statSync as statSync2 } from "node:fs";
-import { isAbsolute as isAbsolute5, resolve as resolve6 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync11, statSync as statSync3 } from "node:fs";
+import { isAbsolute as isAbsolute6, resolve as resolve7 } from "node:path";
 function skippedShareOf(universe, skipped, durations) {
   if (!universe.length) return { share: 0, basis: "files" };
   if (durations && universe.every((t) => durations.has(t))) {
@@ -11478,11 +12593,11 @@ async function readSource2(src, cwd) {
     if (b.length > MAX_MAP_BYTES2) throw new Error(`${b.length} bytes, over ${MAX_MAP_BYTES2}`);
     return b;
   }
-  const p = isAbsolute5(src) ? src : resolve6(cwd, src);
-  if (!existsSync3(p)) return null;
-  const size = statSync2(p).size;
+  const p = isAbsolute6(src) ? src : resolve7(cwd, src);
+  if (!existsSync4(p)) return null;
+  const size = statSync3(p).size;
   if (size > MAX_MAP_BYTES2) throw new Error(`${size} bytes, over ${MAX_MAP_BYTES2}`);
-  return readFileSync8(p);
+  return readFileSync11(p);
 }
 function prefixMatcher(prefixes) {
   if (!prefixes.length) return void 0;
@@ -11607,7 +12722,7 @@ async function work(input) {
   const loaded = await loadMap2(input, base3, cwd);
   const t1 = performance.now();
   const durations = input.durations ? parseDurations(
-    readFileSync8(isAbsolute5(input.durations) ? input.durations : resolve6(cwd, input.durations), "utf8"),
+    readFileSync11(isAbsolute6(input.durations) ? input.durations : resolve7(cwd, input.durations), "utf8"),
     repo
   ) : null;
   let history = [];
@@ -11615,7 +12730,7 @@ async function work(input) {
   if (input.history)
     try {
       history = parseHistory(
-        readFileSync8(isAbsolute5(input.history) ? input.history : resolve6(cwd, input.history), "utf8")
+        readFileSync11(isAbsolute6(input.history) ? input.history : resolve7(cwd, input.history), "utf8")
       );
     } catch (e) {
       notes.push(`history unreadable (${e.message}); no history additions`);
@@ -11698,8 +12813,10 @@ function stepInWorker(input, timeoutMs) {
   return inWorker({ jiffyStep: input }, timeoutMs);
 }
 function inWorker(data2, timeoutMs) {
-  return new Promise((resolve7, reject) => {
-    const w = new Worker(new URL(import.meta.url), { workerData: data2 });
+  return new Promise((resolve8, reject) => {
+    const w = new Worker(new URL(import.meta.url), {
+      workerData: { ...data2, gitDeadline: Date.now() + timeoutMs }
+    });
     const timer = setTimeout(() => {
       reject(new Error(`timed out after ${timeoutMs / 1e3} s`));
       void w.terminate();
@@ -11707,7 +12824,7 @@ function inWorker(data2, timeoutMs) {
     const done = () => clearTimeout(timer);
     w.once("message", (m) => {
       done();
-      if (m.ok) resolve7(m.decision);
+      if (m.ok) resolve8(m.decision);
       else reject(new Error(m.error));
     });
     w.once("error", (e) => {
@@ -11722,6 +12839,7 @@ function inWorker(data2, timeoutMs) {
 }
 var data = isMainThread ? null : workerData;
 if (data?.jiffyDecide || data?.jiffyStep) {
+  if (typeof data.gitDeadline === "number") setGitDeadline(data.gitDeadline);
   let reply;
   try {
     reply = {
@@ -11755,13 +12873,19 @@ if (isMainThread2) {
   const evidence = getInput(env, "evidence").toLowerCase();
   const phase = getInput(env, "phase").toLowerCase();
   try {
-    if (env.STATE_isPost === "true") await sendRecord(env, sink, runPost(env, sink));
-    else {
+    if (env.STATE_isPost === "true") {
+      const record = runPost(env, sink);
+      await sendRecord(env, sink, record);
+      if (record && env.STATE_decision)
+        await runResultsAndOverride(env, sink, env.STATE_decision, { canEnforce: false });
+    } else {
       sink.state?.("isPost", "true");
       if (phase === "select") await runSelectPhase(env, sink, { work: stepInWorker });
-      else if (phase === "outcome")
-        await sendRecord(env, sink, runOutcomePhase(env, sink, decisionPath(env)));
-      else if (phase) {
+      else if (phase === "outcome") {
+        const file = decisionPath(env);
+        await sendRecord(env, sink, runOutcomePhase(env, sink, file));
+        process.exitCode = await runResultsAndOverride(env, sink, file, { canEnforce: true });
+      } else if (phase) {
         sink.warning(`input phase must be select or outcome, got ${JSON.stringify(phase)}; doing nothing`);
         process.exitCode = 1;
       } else await legacy(env, sink, evidence);

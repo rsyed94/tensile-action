@@ -48,9 +48,17 @@ inputs:
     required: false
     default: ''
   test-outcome:
-    description: 'phase outcome: steps.<test>.outcome, so a failed test step whose report lists no failure reads unknown.'
+    description: 'phase outcome: steps.<test>.outcome, so a failed test step whose report lists no failure reads unknown. Required by quarantine-mode enforce.'
     required: false
     default: ''
+  quarantine-mode:
+    description: "phase outcome: the flaky-test quarantine override. shadow (default) records whether every failure was a quarantined test on the service's signed list, and never changes the job's result. enforce makes this step carry the job's result (give the test step continue-on-error: true and pass test-outcome): it passes a failed test job only when every failing test is quarantined for this job's environment, the reports are complete JUnit XML written in this job, the list is fresh and verified, the event is a pull_request, and the service enabled the override for the repo; anything else keeps the job red. The test step must run only the reporting runner (no coverage threshold, no other command) and list every report. off does neither."
+    required: false
+    default: 'shadow'
+  upload-results:
+    description: "phase outcome: send each test's result and duration to the ledger (service-url, OIDC). false turns it off."
+    required: false
+    default: 'true'
   map:
     description: Coverage map (.bin.gz) as a path or an http(s) URL. Missing, unreadable or stale -> run everything.
     required: false
@@ -72,9 +80,29 @@ inputs:
     required: false
     default: ''
   shards:
-    description: Number of shards to balance the selected tests across.
+    description: 'The gate: shards to balance the tests across (by measured duration, longest first onto the lightest shard), or auto: the fewest that finish within shard-target-minutes while billed minutes stay within shard-cost-cap. docs/design/sharding.md.'
     required: false
     default: '1'
+  shard-target-minutes:
+    description: 'shards auto: the wall time to finish the tests within (default 10).'
+    required: false
+    default: ''
+  shard-max:
+    description: 'shards auto: the most shards to use (default 16).'
+    required: false
+    default: ''
+  shard-cost-cap:
+    description: "shards auto: billed minutes may grow to at most this multiple of one job's (default 1.5)."
+    required: false
+    default: ''
+  shard-setup-seconds:
+    description: "Seconds each extra shard's job spends before the tests (checkout, install), for auto and the outcome's sharding projection (default 60)."
+    required: false
+    default: ''
+  shard:
+    description: 'phase select: this leg of a static shard matrix, like "2/4" (pass matrix.shard). shard-args then holds the runner''s own flag for this leg''s share of the full run; the slice of the selection it would run is recorded in shadow. A sharded leg never enforces.'
+    required: false
+    default: ''
   run-all:
     description: Kill switch. Anything other than false/0/empty runs everything (so does env JIFFY_RUN_ALL).
     required: false
@@ -165,6 +193,10 @@ outputs:
     description: Quarantined test files (R13) to run apart from the fast check, as a JSON array; not in tests. Under run-all, exclude them from the main run. Always [] at merge.
   shards:
     description: 'JSON array of {index, total, label, tests, seconds}, label like "1/4". Under run-all tests is empty: shard with the runner''s --shard=label.'
+  shard-plan:
+    description: 'The gate: the shard count and why, as JSON ({n, choice, why, basis, estimated: {wallSeconds, billedMinutes, unshardedWallSeconds, unshardedBilledMinutes}, ...}). Estimates from past durations, not measurements.'
+  shard-args:
+    description: "phase select with shard: the runner's own flag for this leg's share of the full run (vitest/jest --shard=2/4, node --test-shard=2/4, pytest-jiffy --jiffy-shard=2/4). Empty when run-all is false or shard is unset or invalid: then the leg runs everything."
   matrix:
     description: 'The matrix to run as JSON: one combination in axes form ({"os": ["ubuntu-latest"]}) or the full input.'
   file:
