@@ -8633,6 +8633,7 @@ function select({ changes, map, allTests, always }) {
 }
 
 // ../engine/src/plan.ts
+var PLAN_VERSION = "plan@1";
 var DEFAULT_BOUNDS = { maxCommits: 200, maxAgeDays: 14, maxFiles: 2e3 };
 var ms = (a, b) => Math.round((b - a) * 10) / 10;
 function revOk(repo, rev) {
@@ -10203,6 +10204,8 @@ function ledgerDecision(d) {
     testStep: d.testStep,
     runner: d.runner,
     barKey: d.barKey,
+    // The plan's rule version: the service counts a decision only when it recomputed it with the same rules.
+    engine: PLAN_VERSION,
     counts: {
       universe: d.universe,
       selected: selected.length,
