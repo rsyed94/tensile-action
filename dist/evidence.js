@@ -218769,7 +218769,7 @@ var require_public_api = __commonJS({
       const lineCounter$1 = options.lineCounter || prettyErrors && new lineCounter.LineCounter() || null;
       return { lineCounter: lineCounter$1, prettyErrors };
     }
-    function parseAllDocuments(source, options = {}) {
+    function parseAllDocuments2(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser2.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -218844,7 +218844,7 @@ var require_public_api = __commonJS({
       return new Document.Document(value, _replacer, options).toString(options);
     }
     exports.parse = parse3;
-    exports.parseAllDocuments = parseAllDocuments;
+    exports.parseAllDocuments = parseAllDocuments2;
     exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
   }
@@ -218993,6 +218993,22 @@ function deriveStatus(input) {
   return "ready";
 }
 
+// ../evidence/src/words.ts
+var ACTION_TEXT = {
+  fix_code: "Fix the code",
+  strengthen_test: "Strengthen the test",
+  add_test: "Add a test",
+  restore_test: "Restore the test",
+  retry: "Re-run it",
+  wait: "Wait",
+  investigate: "Look into it",
+  none: "Nothing to do",
+  run_main_only_check: "Run the main-only check"
+};
+function actionText(action) {
+  return ACTION_TEXT[action] ?? "Look into it";
+}
+
 // ../evidence/src/render.ts
 var STATUS_TEXT = {
   ready: "Ready",
@@ -219034,7 +219050,7 @@ function findingLine(f, policy) {
     case "main_only_check":
       return `${f.workflow} runs only after merge: ${f.result.replace("_", " ")}${f.reason ? ` (${f.reason})` : ""}.`;
     case "policy_changed":
-      return `This change edits Jiffy's policy: ${f.files.join(", ")}.`;
+      return `This PR changes CI or test setup, so a person reviews it: ${f.files.join(", ")}.`;
     case "tool_problem":
       return `${f.title}`;
   }
@@ -219064,7 +219080,7 @@ function renderText(e, policy) {
     if (!list) continue;
     out2.push("", name2);
     for (const f of list) {
-      out2.push(`  ${findingLine(f, policy)}  [${f.action}]`);
+      out2.push(`  ${findingLine(f, policy)}  [${actionText(f.action)}]`);
       if (f.type === "test_failure" && f.repro) out2.push(`    repro: ${f.repro}`);
       if (f.type === "weak_test")
         for (const s of f.survivors)
@@ -229137,7 +229153,7 @@ function workspaceRoot2(cwd, tmp = realpathSync5(tmpdir3())) {
   const rel = relative8(tmp, real);
   const top = rel.split(sep4)[0] ?? "";
   if (!rel || rel.startsWith("..") || isAbsolute3(rel) || !top.startsWith("jiffy-"))
-    throw new Error(`tests run only in Jiffy's workspace copies, not in ${real}`);
+    throw new Error(`tests run only in Tensile's workspace copies, not in ${real}`);
   return join12(tmp, top);
 }
 function openDirs(root, uid = process.getuid?.() ?? -1) {
@@ -229529,7 +229545,7 @@ var DEFAULT_POLICY = {
   budgetSeconds: 300,
   mainOnlyDispatch: []
 };
-var POLICY_PATH = "jiffy.yml";
+var POLICY_PATH = "tensile.yml";
 var LIMITS = { maxMutants: [1, 200], budgetSeconds: [30, 600] };
 function parseDuration(v) {
   if (typeof v === "number") return Number.isFinite(v) && v > 0 ? v : null;
@@ -229780,11 +229796,11 @@ function detectMainOnly(input) {
   const workflows = [];
   const filtered = [];
   for (const u of input.unreadable ?? [])
-    problem(u.path, `${u.path}: ${u.reason}; Jiffy can't tell whether it runs only after merge.`);
+    problem(u.path, `${u.path}: ${u.reason}; Tensile can't tell whether it runs only after merge.`);
   if (Object.keys(base).length > MAX_WORKFLOWS || Object.keys(head).length > MAX_WORKFLOWS) {
     problem(
       ".github/workflows",
-      `More than ${MAX_WORKFLOWS} workflow files; Jiffy didn't look for main-only workflows.`
+      `More than ${MAX_WORKFLOWS} workflow files; Tensile didn't look for main-only workflows.`
     );
     return { workflows, filtered, findings };
   }
@@ -229855,7 +229871,7 @@ function detectMainOnly(input) {
           mainOnlyFinding(
             { path, name: path, triggers: ["unknown"] },
             "not_run",
-            "Jiffy couldn't read the default branch's copy (YAML anchors over the alias budget); if it runs only after merge, it hasn't run on this change"
+            "Tensile couldn't read the default branch's copy (YAML anchors over the alias budget); if it runs only after merge, it hasn't run on this change"
           )
         );
       continue;
@@ -229910,7 +229926,8 @@ import { createHash as createHash6 } from "node:crypto";
 import { mkdirSync as mkdirSync5, readFileSync as readFileSync16, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { dirname as dirname10, join as join13 } from "node:path";
-var POLICY_FILE = "jiffy.yml";
+var POLICY_FILE = "tensile.yml";
+var POLICY_FILES = [POLICY_FILE, "jiffy.yml"];
 var StepProblem = class extends Error {
   problem;
   subject;
@@ -230064,7 +230081,7 @@ function resolveReference(git2, pr, runSha) {
     throw new StepProblem(
       "config",
       "checkout",
-      `The checkout (${tested.slice(0, 12)}) is neither this run's commit (${runSha.slice(0, 12)}) nor the PR head; Jiffy can't tell what was tested.`
+      `The checkout (${tested.slice(0, 12)}) is neither this run's commit (${runSha.slice(0, 12)}) nor the PR head; Tensile can't tell what was tested.`
     );
   const raw2 = tryGit(git2, ["cat-file", "commit", tested]) ?? "";
   const parents = [...raw2.matchAll(/^parent ([0-9a-f]{40,64})$/gm)].map((m) => m[1]);
@@ -230072,7 +230089,7 @@ function resolveReference(git2, pr, runSha) {
     throw new StepProblem(
       "config",
       "checkout",
-      `The checkout (${tested.slice(0, 12)}) is not a merge of the PR head (${prHead.slice(0, 12)}) the event names; Jiffy can't tell what was tested.`
+      `The checkout (${tested.slice(0, 12)}) is not a merge of the PR head (${prHead.slice(0, 12)}) the event names; Tensile can't tell what was tested.`
     );
   const reference = parents[0];
   const need = [reference, prHead, ...reference === target ? [] : [target]];
@@ -230154,23 +230171,29 @@ function readPolicy(git2, defaultBranch) {
       problem: `The default branch (${defaultBranch}) couldn't be fetched to read ${POLICY_FILE}: ${firstLine(e)}`
     };
   }
-  let entry;
-  try {
-    entry = git2(["ls-tree", "-z", "--long", ref, "--", POLICY_FILE]).replace(/\0$/, "");
-  } catch (e) {
-    return { text: null, problem: `${POLICY_FILE} on ${defaultBranch} couldn't be listed: ${firstLine(e)}` };
+  let entry = "";
+  let file = POLICY_FILE;
+  for (const f of POLICY_FILES) {
+    file = f;
+    try {
+      entry = git2(["ls-tree", "-z", "--long", ref, "--", f]).replace(/\0$/, "");
+    } catch (e) {
+      return { text: null, problem: `${f} on ${defaultBranch} couldn't be listed: ${firstLine(e)}` };
+    }
+    if (entry) break;
   }
   if (!entry) return { text: null, problem: null };
   const m = /^(\d+) (\w+) ([0-9a-f]+)\s+(-|\d+)\t/.exec(entry);
   if (!m || m[2] !== "blob" || m[1] === "120000")
-    return { text: null, problem: `${POLICY_FILE} on ${defaultBranch} is not a regular file` };
+    return { text: null, problem: `${file} on ${defaultBranch} is not a regular file`, path: file };
   if (Number(m[4]) > MAX_POLICY_BYTES)
     return {
       text: null,
-      problem: `${POLICY_FILE} on ${defaultBranch} is larger than ${MAX_POLICY_BYTES / 1024} KB`
+      problem: `${file} on ${defaultBranch} is larger than ${MAX_POLICY_BYTES / 1024} KB`,
+      path: file
     };
   const text = tryGit(git2, ["cat-file", "blob", m[3]]);
-  return text === null ? { text: null, problem: `${POLICY_FILE} on ${defaultBranch} couldn't be read` } : { text, problem: null };
+  return text === null ? { text: null, problem: `${file} on ${defaultBranch} couldn't be read`, path: file } : { text, problem: null, path: file };
 }
 var runOf = (env) => `${env.GITHUB_RUN_ID ?? ""}/${env.GITHUB_RUN_ATTEMPT ?? ""}`;
 function collectState(git2, env, event) {
@@ -230255,11 +230278,11 @@ function unsupportedContent(git2, tested) {
     else if (/(^|\/)\.gitattributes$/.test(m[4])) attributes.push(m[3]);
   }
   if (submodules.length)
-    return `The tested commit has git submodules (${submodules.slice(0, 3).join(", ")}); Jiffy doesn't rebuild them yet, so it didn't evaluate this change.`;
+    return `The tested commit has git submodules (${submodules.slice(0, 3).join(", ")}); Tensile doesn't rebuild them yet, so it didn't evaluate this change.`;
   for (const sha2 of attributes.slice(0, 50)) {
     const text = tryGit(git2, ["cat-file", "blob", sha2]) ?? "";
     if (/\bfilter=lfs\b/.test(text))
-      return "The tested commit stores files in Git LFS; Jiffy doesn't rebuild those yet, so it didn't evaluate this change.";
+      return "The tested commit stores files in Git LFS; Tensile doesn't rebuild those yet, so it didn't evaluate this change.";
   }
   return null;
 }
@@ -230382,12 +230405,13 @@ async function runEvidence(env, sink, deps) {
   const ref = state.ref;
   if (ref) {
     sink.log(
-      `Jiffy evidence: tested ${ref.tested.slice(0, 12)}, reference ${ref.reference.slice(0, 12)} (${ref.how})`
+      `Tensile evidence: tested ${ref.tested.slice(0, 12)}, reference ${ref.reference.slice(0, 12)} (${ref.how})`
     );
-    if (state.policy.problem) extra.push(problemFinding("config", POLICY_FILE, state.policy.problem));
+    const policyFile = typeof state.policy.path === "string" ? state.policy.path.slice(0, 100) : POLICY_FILE;
+    if (state.policy.problem) extra.push(problemFinding("config", policyFile, state.policy.problem));
     const parsed = parsePolicy(state.policy.text);
     policy = parsed.policy;
-    for (const p of parsed.problems) extra.push(problemFinding("config", POLICY_FILE, p));
+    for (const p of parsed.problems) extra.push(problemFinding("config", policyFile, p));
     let canRun = true;
     try {
       isolation = deps.isolate ? await deps.isolate({ file, dir: dirname11(file) }) : "none";
@@ -230403,7 +230427,7 @@ async function runEvidence(env, sink, deps) {
         problemFinding(
           "tests_could_not_run",
           "isolation",
-          `The job asked for the tests to run as a separate user, and that didn't hold, so Jiffy ran no tests: ${firstLine(e)}`
+          `The job asked for the tests to run as a separate user, and that didn't hold, so Tensile ran no tests: ${firstLine(e)}`
         )
       );
     }
@@ -230427,7 +230451,7 @@ async function runEvidence(env, sink, deps) {
             problemFinding(
               "tests_could_not_run",
               "verify",
-              `Jiffy could not evaluate this change: ${firstLine(e)}`
+              `Tensile could not evaluate this change: ${firstLine(e)}`
             )
           );
         } finally {
@@ -230482,7 +230506,7 @@ async function runEvidence(env, sink, deps) {
         problemFinding(
           "tests_could_not_run",
           "isolation",
-          "Processes the tests started were still running after Jiffy killed them, so it can't vouch for this run."
+          "Processes the tests started were still running after Tensile killed them, so it can't vouch for this run."
         )
       );
     isolation = "none";
@@ -230538,7 +230562,7 @@ async function runEvidence(env, sink, deps) {
   return { file, artifact, status: final.status, reason: final.summary, evidence: final };
 }
 function evidenceSummary(o) {
-  const lines = ["## Jiffy evidence", ""];
+  const lines = ["## Tensile evidence", ""];
   if (!o.evidence) {
     lines.push(`Not produced: ${o.reason}.`, "");
     return lines.join("\n");
@@ -230655,7 +230679,7 @@ async function main(env, sink) {
       reason: `internal error: ${firstLine(e)}`,
       evidence: null
     };
-    sink.warning(`Jiffy evidence: ${o.reason}`);
+    sink.warning(`Tensile evidence: ${o.reason}`);
   }
   if (placed) sink.outputs([["status", o.file ? o.status : "inconclusive"]]);
   else
@@ -230664,7 +230688,7 @@ async function main(env, sink) {
       ["artifact", ""],
       ["status", o.status]
     ]);
-  sink.log(`Jiffy evidence: ${o.evidence ? statusText(o.evidence.status) : o.status}: ${o.reason}`);
+  sink.log(`Tensile evidence: ${o.evidence ? statusText(o.evidence.status) : o.status}: ${o.reason}`);
   try {
     sink.summary(evidenceSummary(o));
   } catch (e) {

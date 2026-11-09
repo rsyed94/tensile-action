@@ -7234,7 +7234,7 @@ var require_public_api = __commonJS({
       const lineCounter$1 = options.lineCounter || prettyErrors && new lineCounter.LineCounter() || null;
       return { lineCounter: lineCounter$1, prettyErrors };
     }
-    function parseAllDocuments(source, options = {}) {
+    function parseAllDocuments2(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser2.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7309,7 +7309,7 @@ var require_public_api = __commonJS({
       return new Document.Document(value, _replacer, options).toString(options);
     }
     exports.parse = parse3;
-    exports.parseAllDocuments = parseAllDocuments;
+    exports.parseAllDocuments = parseAllDocuments2;
     exports.parseDocument = parseDocument;
     exports.stringify = stringify;
   }
@@ -7482,7 +7482,7 @@ ${d}
 `);
     },
     warning(message) {
-      process.stdout.write(`::warning title=Jiffy::${escapeCommand(message)}
+      process.stdout.write(`::warning title=Tensile::${escapeCommand(message)}
 `);
     },
     state(name2, value) {
@@ -8257,12 +8257,24 @@ var Unattributable = class extends Error {
 };
 function parseLock(text) {
   if (text.length > MAX_LOCKFILE_BYTES) return `over ${MAX_LOCKFILE_BYTES} bytes`;
-  let doc;
+  let docs;
   try {
-    doc = (0, import_yaml.parse)(text, { maxAliasCount: 0, uniqueKeys: true, strict: true });
+    const parsed = (0, import_yaml.parseAllDocuments)(text, { uniqueKeys: true, strict: true });
+    if (!Array.isArray(parsed)) return "unparseable (empty)";
+    docs = parsed.map((d) => {
+      if (d.errors.length) throw d.errors[0];
+      return d.toJS({ maxAliasCount: 0 });
+    });
   } catch (e) {
     return `unparseable (${e.message.split("\n")[0]})`;
   }
+  const main = docs.filter((d) => isObj(d) && "importers" in d);
+  if (docs.length === 1 && main.length === 0) {
+    if (!isObj(docs[0])) return "not a mapping";
+  } else if (main.length !== 1)
+    return `${main.length} lockfile documents with importers among ${docs.length}`;
+  const doc = docs.length === 1 ? docs[0] : main[0];
+  const others = docs.filter((d) => d !== doc);
   if (!isObj(doc)) return "not a mapping";
   const v = String(doc.lockfileVersion ?? "");
   const version = v === "9.0" ? "9" : v === "6.0" || v === "6.1" ? "6" : null;
@@ -8278,7 +8290,7 @@ function parseLock(text) {
   const packages = doc.packages ?? {};
   const snapshots = doc.snapshots ?? {};
   if (!isObj(packages) || !isObj(snapshots)) return "packages or snapshots malformed";
-  return { version, top: doc, importers, packages, snapshots };
+  return { version, top: doc, importers, packages, snapshots, others };
 }
 function withoutPeers(key) {
   const at = key.indexOf("@", 1);
@@ -8395,6 +8407,7 @@ function pnpmLockDiff(oldText, newText, settings) {
   const b = parseLock(newText);
   if (typeof b === "string") return `head lockfile ${b}`;
   if (a.version !== b.version) return "lockfileVersion changed";
+  if (canon(a.others) !== canon(b.others)) return "another lockfile document (config dependencies) changed";
   for (const k of /* @__PURE__ */ new Set([...Object.keys(a.top), ...Object.keys(b.top)])) {
     if (KNOWN_TOP.has(k)) continue;
     if (canon(a.top[k]) !== canon(b.top[k])) return `shared section ${k} changed`;
@@ -17474,15 +17487,15 @@ function renderSummary(r) {
   const sampledNote = sampled.size ? `, ${sampled.size} of them sampled` : "";
   if (report && !sel.runAll) {
     const n = sel.tests.size + sampled.size;
-    out2.push(`## Jiffy (report mode): would run ${n} of ${universe} test files (${share()}${sampledNote})`);
+    out2.push(`## Tensile (report mode): would run ${n} of ${universe} test files (${share()}${sampledNote})`);
     out2.push("", "> Report mode changes nothing: this run tests everything. Set `mode: enforce` to skip.");
   } else if (report) {
-    out2.push("## Jiffy (report mode): would run everything");
+    out2.push("## Tensile (report mode): would run everything");
     out2.push("", `> ${esc2(runAllReason(sel, d))}`);
   } else if (r.runAll) {
-    out2.push("## Jiffy: running everything", "", `> ${esc2(r.reason ?? "")}`);
+    out2.push("## Tensile: running everything", "", `> ${esc2(r.reason ?? "")}`);
   } else {
-    out2.push(`## Jiffy: ${r.tests.length} of ${universe} test files (${share()}${sampledNote})`);
+    out2.push(`## Tensile: ${r.tests.length} of ${universe} test files (${share()}${sampledNote})`);
   }
   out2.push("");
   for (const w of r.warnings) out2.push(`> **Warning:** ${esc2(w)}`, "");
@@ -17860,8 +17873,8 @@ async function runGate(env, sink, deps) {
     r = fullResult(env, null, `internal error: ${e.message}`, null);
   }
   writeOutputs(sink, r);
-  if (r.runAll) sink.log(`Jiffy: running everything: ${r.reason}`);
-  else sink.log(`Jiffy: ${r.tests.length} test files (${r.sampled.length} sampled)`);
+  if (r.runAll) sink.log(`Tensile: running everything: ${r.reason}`);
+  else sink.log(`Tensile: ${r.tests.length} test files (${r.sampled.length} sampled)`);
   if (r.reason && LOUD.test(r.reason)) sink.warning(`running everything: ${r.reason}`);
   for (const w of r.warnings) sink.warning(w);
   try {
@@ -17938,7 +17951,8 @@ var MAX_POLICY_BYTES = 64 * 1024;
 var isWorkflowFile = (p) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(p);
 
 // src/start.ts
-var POLICY_FILE = "jiffy.yml";
+var POLICY_FILE = "tensile.yml";
+var POLICY_FILES = [POLICY_FILE, "jiffy.yml"];
 var StepProblem = class extends Error {
   problem;
   subject;
@@ -18102,7 +18116,7 @@ function resolveReference(git2, pr, runSha) {
     throw new StepProblem(
       "config",
       "checkout",
-      `The checkout (${tested.slice(0, 12)}) is neither this run's commit (${runSha.slice(0, 12)}) nor the PR head; Jiffy can't tell what was tested.`
+      `The checkout (${tested.slice(0, 12)}) is neither this run's commit (${runSha.slice(0, 12)}) nor the PR head; Tensile can't tell what was tested.`
     );
   const raw2 = tryGit(git2, ["cat-file", "commit", tested]) ?? "";
   const parents = [...raw2.matchAll(/^parent ([0-9a-f]{40,64})$/gm)].map((m) => m[1]);
@@ -18110,7 +18124,7 @@ function resolveReference(git2, pr, runSha) {
     throw new StepProblem(
       "config",
       "checkout",
-      `The checkout (${tested.slice(0, 12)}) is not a merge of the PR head (${prHead.slice(0, 12)}) the event names; Jiffy can't tell what was tested.`
+      `The checkout (${tested.slice(0, 12)}) is not a merge of the PR head (${prHead.slice(0, 12)}) the event names; Tensile can't tell what was tested.`
     );
   const reference = parents[0];
   const need = [reference, prHead, ...reference === target ? [] : [target]];
@@ -18192,23 +18206,29 @@ function readPolicy(git2, defaultBranch) {
       problem: `The default branch (${defaultBranch}) couldn't be fetched to read ${POLICY_FILE}: ${firstLine(e)}`
     };
   }
-  let entry;
-  try {
-    entry = git2(["ls-tree", "-z", "--long", ref, "--", POLICY_FILE]).replace(/\0$/, "");
-  } catch (e) {
-    return { text: null, problem: `${POLICY_FILE} on ${defaultBranch} couldn't be listed: ${firstLine(e)}` };
+  let entry = "";
+  let file = POLICY_FILE;
+  for (const f of POLICY_FILES) {
+    file = f;
+    try {
+      entry = git2(["ls-tree", "-z", "--long", ref, "--", f]).replace(/\0$/, "");
+    } catch (e) {
+      return { text: null, problem: `${f} on ${defaultBranch} couldn't be listed: ${firstLine(e)}` };
+    }
+    if (entry) break;
   }
   if (!entry) return { text: null, problem: null };
   const m = /^(\d+) (\w+) ([0-9a-f]+)\s+(-|\d+)\t/.exec(entry);
   if (!m || m[2] !== "blob" || m[1] === "120000")
-    return { text: null, problem: `${POLICY_FILE} on ${defaultBranch} is not a regular file` };
+    return { text: null, problem: `${file} on ${defaultBranch} is not a regular file`, path: file };
   if (Number(m[4]) > MAX_POLICY_BYTES)
     return {
       text: null,
-      problem: `${POLICY_FILE} on ${defaultBranch} is larger than ${MAX_POLICY_BYTES / 1024} KB`
+      problem: `${file} on ${defaultBranch} is larger than ${MAX_POLICY_BYTES / 1024} KB`,
+      path: file
     };
   const text = tryGit(git2, ["cat-file", "blob", m[3]]);
-  return text === null ? { text: null, problem: `${POLICY_FILE} on ${defaultBranch} couldn't be read` } : { text, problem: null };
+  return text === null ? { text: null, problem: `${file} on ${defaultBranch} couldn't be read`, path: file } : { text, problem: null, path: file };
 }
 var runOf = (env) => `${env.GITHUB_RUN_ID ?? ""}/${env.GITHUB_RUN_ATTEMPT ?? ""}`;
 function collectState(git2, env, event) {
@@ -18308,7 +18328,7 @@ function mainStart(env, sink) {
     o = runStart(env, sink);
   } catch (e) {
     o = { file: null, artifact: null, status: "skipped", reason: `internal error: ${firstLine(e)}` };
-    sink.warning(`Jiffy evidence start: ${o.reason}`);
+    sink.warning(`Tensile evidence start: ${o.reason}`);
   }
   if (!o.file)
     sink.outputs([
@@ -18316,7 +18336,7 @@ function mainStart(env, sink) {
       ["artifact", ""],
       ["status", o.status]
     ]);
-  sink.log(`Jiffy evidence start: ${o.reason}`);
+  sink.log(`Tensile evidence start: ${o.reason}`);
   return 0;
 }
 
@@ -18906,6 +18926,8 @@ function verifyQuarantine(keys, signed, expect) {
     return no("list has no ledger freshness");
   if (typeof c.complete !== "boolean") return no("list has no completeness flag");
   if (!Array.isArray(c.tests) || c.tests.length > QUARANTINE_MAX_TESTS) return no("list tests are malformed");
+  if (c.enforceOnly !== void 0 && (!Array.isArray(c.enforceOnly) || c.enforceOnly.length > QUARANTINE_MAX_TESTS || c.enforceOnly.some((x) => !isStr2(x, 100))))
+    return no("list enforceOnly is malformed");
   for (const e of c.tests) {
     const x = e;
     if (!x || typeof x !== "object" || !isStr2(x.test, 1e3) || !isStr2(x.env, 2e3) || !isStr2(x.decisionId, 100) || !isStr2(x.expiresAt, 40) || !Number.isFinite(Date.parse(x.expiresAt)) || !Array.isArray(x.owners) || x.owners.some((o) => !isStr2(o, 200)))
@@ -19200,16 +19222,22 @@ function decideOverride(x) {
   reasons.push("internal: no failing test matched");
   return out2("unknown");
 }
-function overrideMode(requested, list3, o) {
+var TEST_CODE = /(^|[./])(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.py$|(^|\/)(test|tests|__tests__|__mocks__|__fixtures__|fixtures?|e2e|spec|testdata|conftest\.py)(\/|$)/;
+var changesTestCode = (files) => files.some((f) => TEST_CODE.test(f));
+function overrideMode(requested, list3, o, changed = null) {
   if (requested !== "enforce") return { requested, mode: "shadow", applied: false, why: null };
   if (!list3.ok) return { requested, mode: "shadow", applied: false, why: `no usable list: ${list3.reason}` };
-  if (!list3.claims.enforce)
+  if (!list3.claims.enforce) {
+    const only = Array.isArray(list3.claims.enforceOnly) ? new Set(list3.claims.enforceOnly) : null;
+    if (only?.size && changed !== null && !changesTestCode(changed) && o.verdict === "would_pass" && o.quarantined.length > 0 && o.quarantined.length === o.failedCount && o.quarantined.every((q) => only.has(q.decisionId)))
+      return { requested, mode: "enforce", applied: true, why: null };
     return {
       requested,
       mode: "shadow",
       applied: false,
-      why: "the service hasn't enabled the override for this repo (its opt-in or the module's bar)"
+      why: only?.size ? changed === null ? "on for low-risk failures only, and the change's files couldn't be read" : changesTestCode(changed) ? "on for low-risk failures only, and this change edits test code" : "on for low-risk failures only, and not every failing test is a quarantined test with enough confirmed flips" : "the service hasn't enabled the override for this repo (its opt-in or the module's bar)"
     };
+  }
   return { requested, mode: "enforce", applied: o.verdict === "would_pass", why: null };
 }
 function overrideExit(requested, testOutcome, m) {
@@ -19407,7 +19435,7 @@ async function runOverride(env, sink, d, results, deps) {
       runnerProblems: deps.runnerProblems ?? []
     };
     const o = decideOverride(input);
-    let m = overrideMode(requested, list3, o);
+    let m = overrideMode(requested, list3, o, deps.changed ?? null);
     if (deps.shadowOnly && m.mode === "enforce")
       m = { requested, mode: "shadow", applied: false, why: deps.shadowOnly };
     reportOverride(sink, o, m);
@@ -19462,6 +19490,8 @@ function ledgerDecision(d) {
     // Sharding (docs/design/sharding.md): this leg's shard, and the projection, labelled as one.
     ...d.shard && { shard: d.shard },
     ...d.shardProjection && { shardProjection: d.shardProjection },
+    // The low-risk scope's facts (app modules/scopes.ts): kept only when they fit, else dropped (out of scope).
+    ...d.scope && Buffer.byteLength(JSON.stringify(d.scope)) <= 24 * 1024 && { scope: d.scope },
     ...d.fullSuite && { fullSuite: d.fullSuite },
     ...d.inputs && { inputs: d.inputs }
   };
@@ -19763,6 +19793,15 @@ function runPost(env, sink) {
   if (existsSync3(recordPath(decisionFile))) return null;
   return runOutcomePhase(env, sink, decisionFile);
 }
+function changedFiles(decisionFile, repo) {
+  try {
+    const d = readDecision(decisionFile);
+    if (!d.base || !d.head) return null;
+    return git(repo, ["diff", "--name-only", "-z", "--no-renames", d.base, d.head]).split("\0").filter(Boolean);
+  } catch {
+    return null;
+  }
+}
 function jobFacts(env, decisionFile) {
   try {
     const d = readDecision(decisionFile);
@@ -19826,6 +19865,7 @@ async function runResultsAndOverride(env, sink, decisionFile, opts) {
       }
     await sendResults(env, sink, upload);
     const r = await runOverride(env, sink, d, results, {
+      changed: changedFiles(decisionFile, repo),
       ...opts.deps,
       matrixKeyOf: matrixKey,
       dated,
@@ -20275,7 +20315,8 @@ async function decideStep(env, deps) {
     skipped: w.skipped,
     skippedShare: w.skippedShare,
     skippedShareBasis: w.skippedShareBasis,
-    timings: w.timings
+    timings: w.timings,
+    ...w.scope && { scope: w.scope }
   });
   const bad = [...w.selected.map((s) => s.test), ...w.sampled].find((t) => /^-|[\r\n\0]/.test(t));
   if (bad) {
@@ -20535,11 +20576,14 @@ async function runUpload(env, opts = {}) {
   if (env.GITHUB_EVENT_NAME !== "pull_request" || !event.pull_request)
     return done(true, "not a pull_request run; nothing to upload");
   if (isForkPr(event))
-    return done(true, "pull request from a fork: no OIDC token, so Jiffy shows the evidence as unavailable");
+    return done(
+      true,
+      "pull request from a fork: no OIDC token, so Tensile shows the evidence as unavailable"
+    );
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)
     return done(
       true,
-      "no OIDC token for this run (Dependabot pull requests and forks get none, or the job lacks `id-token: write`), so Jiffy shows the evidence as unavailable"
+      "no OIDC token for this run (Dependabot pull requests and forks get none, or the job lacks `id-token: write`), so Tensile shows the evidence as unavailable"
     );
   let url;
   try {
@@ -20581,7 +20625,7 @@ async function runUpload(env, opts = {}) {
         results.push({
           file: name2,
           ok: false,
-          detail: `its sha256 (${sha.slice(0, 12)}) doesn't match what the evidence step wrote (${expected.size ? [...expected].map((h) => h.slice(0, 12)).join(", ") : "nothing it vouched for"}); not uploaded, so Jiffy shows this evidence as unavailable`
+          detail: `its sha256 (${sha.slice(0, 12)}) doesn't match what the evidence step wrote (${expected.size ? [...expected].map((h) => h.slice(0, 12)).join(", ") : "nothing it vouched for"}); not uploaded, so Tensile shows this evidence as unavailable`
         });
         continue;
       }
@@ -20615,13 +20659,13 @@ async function runUpload(env, opts = {}) {
   const failed = results.filter((r) => !r.ok).length;
   return done(
     !failed,
-    failed ? `${failed} of ${results.length} evidence file(s) not uploaded; Jiffy shows that evidence as unavailable` : `${results.length} file(s) uploaded`,
+    failed ? `${failed} of ${results.length} evidence file(s) not uploaded; Tensile shows that evidence as unavailable` : `${results.length} file(s) uploaded`,
     results
   );
 }
 var cell = (s) => s.replace(/[|\r\n]/g, " ");
 function uploadSummary(o) {
-  const lines4 = ["## Jiffy evidence upload", "", `${o.reason}.`, ""];
+  const lines4 = ["## Tensile evidence upload", "", `${o.reason}.`, ""];
   if (o.results.length) {
     lines4.push("| File | Result |", "| --- | --- |");
     for (const r of o.results) lines4.push(`| ${cell(r.file)} | ${r.ok ? "\u2713" : "\u2717"} ${cell(r.detail)} |`);
@@ -20636,7 +20680,7 @@ async function mainUpload(env, sink) {
   } catch (e) {
     o = { ok: false, reason: `internal error: ${e.message}`, results: [] };
   }
-  sink.log(`Jiffy evidence upload: ${o.reason}`);
+  sink.log(`Tensile evidence upload: ${o.reason}`);
   for (const r of o.results) sink.log(`  ${r.ok ? "ok" : "FAILED"} ${r.file}: ${r.detail}`);
   if (!o.ok) sink.warning(`evidence upload: ${o.reason}`);
   try {
@@ -20652,6 +20696,17 @@ import { isMainThread, parentPort, Worker, workerData } from "node:worker_thread
 // src/step/work.ts
 import { existsSync as existsSync4, readFileSync as readFileSync11, statSync as statSync3 } from "node:fs";
 import { isAbsolute as isAbsolute6, resolve as resolve7 } from "node:path";
+var SCOPE_MAX_FILES = 300;
+function scopeFactsAt(repo, base3, head) {
+  try {
+    const files = git(repo, ["diff", "--name-only", "-z", "--no-renames", base3, head]).split("\0").filter(Boolean);
+    const roots = readWorkspaces(repo, head).map((w) => w.root).slice(0, 500);
+    const truncated = files.length > SCOPE_MAX_FILES;
+    return { files: truncated ? [] : files, filesTruncated: truncated, packageRoots: roots };
+  } catch {
+    return void 0;
+  }
+}
 function skippedShareOf(universe, skipped, durations) {
   if (!universe.length) return { share: 0, basis: "files" };
   if (durations && universe.every((t) => durations.has(t))) {
@@ -20872,6 +20927,7 @@ async function work(input) {
   const sampledSet = new Set(sampled);
   const skipped = present.filter((t) => !sampledSet.has(t));
   const share = skippedShareOf(plan.universe, skipped, durations);
+  const scope = scopeFactsAt(repo, base3, head);
   timings.totalMs = Math.round((performance.now() - t0) * 10) / 10;
   return result({
     from: plan.from,
@@ -20885,7 +20941,8 @@ async function work(input) {
     skipped,
     skippedShare: share.share,
     skippedShareBasis: share.basis,
-    timings
+    timings,
+    ...scope && { scope }
   });
 }
 
@@ -20975,7 +21032,7 @@ if (isMainThread2) {
       } else await legacy(env, sink, evidence);
     }
   } catch (e) {
-    process.stdout.write(`::error title=Jiffy::${escapeCommand(e.message)}
+    process.stdout.write(`::error title=Tensile::${escapeCommand(e.message)}
 `);
     process.exitCode = 1;
   }
