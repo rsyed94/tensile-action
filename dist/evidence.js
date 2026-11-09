@@ -187682,7 +187682,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         return ts_textChanges_exports.ChangeTracker.with(
           { host, formatContext, preferences },
           (changeTracker) => {
-            const parsed = contents.map((c) => parse2(sourceFile, c));
+            const parsed = contents.map((c) => parse3(sourceFile, c));
             const flattenedLocations = focusLocations && flatten(focusLocations);
             for (const nodes of parsed) {
               placeNodeGroup(
@@ -187695,7 +187695,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           }
         );
       }
-      function parse2(sourceFile, content) {
+      function parse3(sourceFile, content) {
         const nodeKinds = [
           {
             parse: () => createSourceFile(
@@ -218802,7 +218802,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse2(src, reviver, options) {
+    function parse3(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -218843,7 +218843,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse2;
+    exports.parse = parse3;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
@@ -219390,6 +219390,10 @@ var BUILTINS = new Set(builtinModules);
 
 // ../engine/src/globs.ts
 var MAX_BYTES = 2 * 1024 * 1024;
+
+// ../engine/src/lockfile.ts
+var import_yaml = __toESM(require_dist(), 1);
+var MAX_LOCKFILE_BYTES = 32 * 1024 * 1024;
 
 // ../engine/src/spans/python.ts
 import { createRequire } from "node:module";
@@ -224167,7 +224171,7 @@ if (!nativeBinding) {
   }
   throw new Error(`Failed to load native binding`);
 }
-var { Severity, ParseResult, ExportExportNameKind, ExportImportNameKind, ExportLocalNameKind, ImportNameKind, parse, parseSync, rawTransferSupported } = nativeBinding;
+var { Severity, ParseResult, ExportExportNameKind, ExportImportNameKind, ExportLocalNameKind, ImportNameKind, parse: parse2, parseSync, rawTransferSupported } = nativeBinding;
 var { getBufferOffset, parseRaw, parseRawSync } = nativeBinding;
 
 // ../../node_modules/.pnpm/oxc-parser@0.157.0/node_modules/oxc-parser/src-js/generated/visit/keys.js
@@ -224469,6 +224473,10 @@ var READS_MARK = fnId("", "jiffy:reads");
 var PART_FORMAT = 2;
 var FORMAT_MARK = fnId("", `jiffy:v${PART_FORMAT}`);
 var CHILDREN_MARK = fnId("", "jiffy:children");
+
+// ../engine/src/narrow.ts
+var MAX_CORPUS_BYTES = 256 * 1024 * 1024;
+var MAX_TEXT = 2 * 1024 * 1024;
 
 // ../engine/src/specs.ts
 var MAX_SPEC_SCAN_BYTES = 2 * 1024 * 1024;
@@ -229468,7 +229476,7 @@ var MAX_POLICY_BYTES = 64 * 1024;
 var isWorkflowFile = (p) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(p);
 
 // src/policy.ts
-var import_yaml = __toESM(require_dist(), 1);
+var import_yaml2 = __toESM(require_dist(), 1);
 import { createHash as createHash5 } from "node:crypto";
 var MAX_ALIASES = 1e3;
 var YamlError = class extends Error {
@@ -229482,22 +229490,22 @@ var YamlError = class extends Error {
 function parseYaml(text, maxBytes = MAX_YAML_BYTES, opts = {}) {
   if (Buffer.byteLength(text) > maxBytes) throw new YamlError(`larger than ${maxBytes / 1024} KB`, "size");
   try {
-    const doc = (0, import_yaml.parseDocument)(text, {
+    const doc = (0, import_yaml2.parseDocument)(text, {
       uniqueKeys: false,
       prettyErrors: false,
       ...opts.strings && { schema: "failsafe" }
     });
     if (doc.errors.length) throw new YamlError(doc.errors[0].message.split("\n")[0], "syntax");
     let dup = null;
-    (0, import_yaml.visit)(doc, {
+    (0, import_yaml2.visit)(doc, {
       Map(_, node) {
-        if (!(0, import_yaml.isMap)(node)) return;
+        if (!(0, import_yaml2.isMap)(node)) return;
         const seen = /* @__PURE__ */ new Set();
         for (const pair of node.items) {
-          const k = (0, import_yaml.isScalar)(pair.key) ? String(pair.key.value) : JSON.stringify(pair.key ?? null);
+          const k = (0, import_yaml2.isScalar)(pair.key) ? String(pair.key.value) : JSON.stringify(pair.key ?? null);
           if (seen.has(k)) {
             dup = k;
-            return import_yaml.visit.BREAK;
+            return import_yaml2.visit.BREAK;
           }
           seen.add(k);
         }
@@ -229724,13 +229732,13 @@ function allowEntry(dispatch, path, names2) {
   ) ?? null;
 }
 function plan(cache2, opts) {
-  const parse2 = (t) => {
+  const parse3 = (t) => {
     if (t === void 0) return null;
     const p = cache2.get(t);
     return p instanceof Error ? null : p;
   };
-  const b = parse2(opts.base);
-  const h = parse2(opts.dispatchHead);
+  const b = parse3(opts.base);
+  const h = parse3(opts.dispatchHead);
   const entry = allowEntry(opts.dispatch, opts.path, [b?.name ?? null, h?.name ?? null]);
   if (!entry) return { allowed: false, reason: "not listed in main_only_dispatch" };
   if (opts.fork) return { allowed: false, reason: "pull request from a fork" };

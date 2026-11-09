@@ -24,7 +24,7 @@ inputs:
     required: false
     default: ''
   history:
-    description: 'phase select: recent test failures from the ledger, a JSON array of {file, failedAt}. Only adds tests.'
+    description: 'phase select: recent test failures, a JSON array of {file, failedAt}, or ledger: fetched from service-url for today (whole days before it), which the service can check when it recomputes the decision. Only adds tests.'
     required: false
     default: ''
   max-map-commits:
@@ -52,7 +52,7 @@ inputs:
     required: false
     default: ''
   quarantine-mode:
-    description: "phase outcome: the flaky-test quarantine override. shadow (default) records whether every failure was a quarantined test on the service's signed list, and never changes the job's result. enforce makes this step carry the job's result (give the test step continue-on-error: true and pass test-outcome): it passes a failed test job only when every failing test is quarantined for this job's environment, the reports are complete JUnit XML written in this job, the list is fresh and verified, the event is a pull_request, and the service enabled the override for the repo; anything else keeps the job red. The test step must run only the reporting runner (no coverage threshold, no other command) and list every report. off does neither."
+    description: "phase outcome: the flaky-test quarantine override. shadow (default) records whether every failure was a quarantined test on the service's signed list, and never changes the job's result. auto (older name: enforce) lets the Tensile service decide, from the failure-intelligence module's mode on the repo (turned on in the app or with `tensile modules on failures`): this step carries the job's result (give the test step continue-on-error: true and pass test-outcome): it passes a failed test job only when every failing test is quarantined for this job's environment, the reports are complete JUnit XML written in this job, the list is fresh and verified, the event is a pull_request, and the service enabled the override for the repo; anything else keeps the job red. The test step must run only the reporting runner (no coverage threshold, no other command) and list every report. off does neither."
     required: false
     default: 'shadow'
   upload-results:
@@ -68,7 +68,7 @@ inputs:
     required: false
     default: ''
   durations:
-    description: 'Vitest/Jest JSON report or {"file": seconds} JSON. Defines the full test list and balances shards.'
+    description: 'Vitest/Jest JSON report or {"file": seconds} JSON, or (phase select) ledger: per-file durations fetched from service-url, which the service can check when it recomputes the decision. Defines the full test list and balances shards.'
     required: false
     default: ''
   mode:
@@ -177,6 +177,8 @@ outputs:
     description: 'phase select: the decision file written (for phase outcome).'
   record-file:
     description: 'phase outcome: the ledger records (tensile.selection-record): the smart_execution decision and its outcome. With service-url and id-token: write, also sent to the service (POST /v1/ledger/selection-records), which records it as a claim.'
+  results-file:
+    description: "phase outcome: the job's per-test results as the ledger takes them (tensile.ci-upload, POST /v1/ledger/uploads), written whenever a report was read. A job without id-token: write (one that runs untrusted code) can hand it to another job of the run to send."
   verdict:
     description: 'phase outcome: correct, miss or unknown.'
   missed:
