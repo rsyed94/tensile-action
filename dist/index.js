@@ -7375,6 +7375,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute as isAbsolute2, relative, resolve as resolve2, sep } from "node:path";
 
 // src/context.ts
+var import_yaml = __toESM(require_dist(), 1);
 import { readFileSync } from "node:fs";
 function isForkPr(event) {
   const head = event.pull_request?.head?.repo?.full_name;
@@ -7387,6 +7388,9 @@ function readEvent(env) {
   return JSON.parse(readFileSync(p, "utf8"));
 }
 var MERGE_QUEUE_BRANCH = /^(gh-readonly-queue\/|trunk-merge\/|trunk-temp\/|mergify\/merge-queue\/|gtmq_|mq-tmp-|automation\/bors\/|staging$|staging\.tmp$|trying$|auto$)/;
+function isQueueBranch(branch, prefixes = []) {
+  return MERGE_QUEUE_BRANCH.test(branch) || prefixes.some((p) => p && branch.startsWith(p));
+}
 function planFor(env, event, baseOverride) {
   const name2 = env.GITHUB_EVENT_NAME ?? "";
   if (name2 === "merge_group")
@@ -7456,6 +7460,94 @@ function pushShadowBase(env, event) {
   if (event.forced !== false || event.created === true) return null;
   if (event.after !== void 0 && event.after !== sha) return null;
   return before;
+}
+var MAX_GLOB = 1024;
+function branchGlob(pattern) {
+  const toks = [];
+  for (let i2 = 0; i2 < pattern.length && pattern.length <= MAX_GLOB; i2++) {
+    const c = pattern[i2];
+    if (c === "*") {
+      if (toks.at(-1)?.k !== "star") toks.push({ k: "star" });
+    } else if (c === "?") toks.push({ k: "one" });
+    else if (c === "[" && pattern.indexOf("]", i2 + 2) > 0) {
+      toks.push({ k: "one" });
+      i2 = pattern.indexOf("]", i2 + 2);
+    } else toks.push({ k: "lit", c });
+  }
+  return {
+    test(s) {
+      if (pattern.length > MAX_GLOB || s.length > MAX_GLOB) return true;
+      let prev = new Array(s.length + 1).fill(false);
+      prev[0] = true;
+      for (const t of toks) {
+        const cur = new Array(s.length + 1).fill(false);
+        for (let j = 0; j <= s.length; j++) {
+          if (t.k === "star") cur[j] = prev[j] || j > 0 && cur[j - 1];
+          else if (j > 0) cur[j] = prev[j - 1] && (t.k === "one" || s[j - 1] === t.c);
+        }
+        prev = cur;
+      }
+      return prev[s.length];
+    }
+  };
+}
+function landingBranchReason(branch, landing) {
+  if (!landing || landing.readAt === null)
+    return `the repo's landing mode isn't known, so ${branch} may be a protected or deployment branch`;
+  if (isQueueBranch(branch, landing.queuePrefixes)) return `${branch} is the repo's merge-queue branch`;
+  const p = landing.landingBranches.find((x) => branchGlob(x).test(branch));
+  return p === void 0 ? null : `${branch} is a protected or deployment branch (${p})`;
+}
+function targetBranch(env, event) {
+  const name2 = env.GITHUB_EVENT_NAME ?? "";
+  if (name2 === "pull_request" || name2 === "pull_request_target")
+    return env.GITHUB_BASE_REF || event.pull_request?.base?.ref || null;
+  return event.repository?.default_branch ?? null;
+}
+function jobCheckNames(workflowText, jobId) {
+  let doc;
+  try {
+    doc = (0, import_yaml.parse)(workflowText);
+  } catch {
+    return null;
+  }
+  const jobs = doc && typeof doc === "object" ? doc.jobs : void 0;
+  if (!jobs || typeof jobs !== "object" || !Object.prototype.hasOwnProperty.call(jobs, jobId)) return null;
+  const job = jobs[jobId];
+  if (!job || typeof job !== "object" || "uses" in job) return null;
+  const n = job.name;
+  if (n === void 0 || n === null) return [jobId];
+  if (typeof n !== "string" || !n || n.includes("${{")) return null;
+  return [n];
+}
+function requiredJob(landing, target, names2) {
+  if (!landing || landing.readAt === null)
+    return { required: true, why: "the repo's landing mode isn't known: every job counts as required" };
+  if (target !== landing.defaultBranch)
+    return {
+      required: true,
+      why: `the change lands on ${target ?? "an unknown branch"}, not ${landing.defaultBranch} (the branch the landing mode was read for)`
+    };
+  if (landing.mode === "queue")
+    return { required: false, why: "an enforced merge queue runs everything before landing" };
+  if (landing.requiredChecks === null)
+    return { required: true, why: "no enforced merge queue, and the required checks can't be read" };
+  if (!landing.requiredChecks.length)
+    return { required: false, why: "no enforced merge queue, and no check is required" };
+  if (!names2)
+    return {
+      required: true,
+      why: "no enforced merge queue, and this job's check name can't be read from the workflow"
+    };
+  const lower = names2.map((n) => n.toLowerCase());
+  const hit = landing.requiredChecks.find((raw2) => {
+    const c = raw2.toLowerCase();
+    return c.includes(" / ") || lower.some((n) => c === n || c.startsWith(`${n} (`));
+  });
+  return hit === void 0 ? { required: false, why: "no enforced merge queue, and this job is not a required check" } : {
+    required: true,
+    why: `no enforced merge queue, and this job is the required check ${JSON.stringify(hit)}`
+  };
 }
 
 // src/io.ts
@@ -8402,10 +8494,10 @@ function globMatch(glob, path) {
 }
 
 // ../engine/src/lockfile.ts
-var import_yaml2 = __toESM(require_dist(), 1);
+var import_yaml3 = __toESM(require_dist(), 1);
 
 // ../engine/src/graph/locks.ts
-var import_yaml = __toESM(require_dist(), 1);
+var import_yaml2 = __toESM(require_dist(), 1);
 var MAX_LOCK_BYTES = 32 * 1024 * 1024;
 var Unattributable = class extends Error {
 };
@@ -8696,7 +8788,7 @@ function yarnLockDiff(oldText, newText, manifests) {
     if (/^__metadata:/m.test(text)) {
       let doc;
       try {
-        doc = (0, import_yaml.parse)(text, { maxAliasCount: 0, uniqueKeys: true, strict: true });
+        doc = (0, import_yaml2.parse)(text, { maxAliasCount: 0, uniqueKeys: true, strict: true });
       } catch (e) {
         return `unparseable (${e.message.split("\n")[0]})`;
       }
@@ -8744,7 +8836,7 @@ function parseLock(text) {
   if (text.length > MAX_LOCKFILE_BYTES) return `over ${MAX_LOCKFILE_BYTES} bytes`;
   let docs;
   try {
-    const parsed = (0, import_yaml2.parseAllDocuments)(text, { uniqueKeys: true, strict: true });
+    const parsed = (0, import_yaml3.parseAllDocuments)(text, { uniqueKeys: true, strict: true });
     if (!Array.isArray(parsed)) return "unparseable (empty)";
     docs = parsed.map((d) => {
       if (d.errors.length) throw d.errors[0];
@@ -8868,7 +8960,7 @@ function pnpmSettings(npmrc, workspaceYaml) {
   if (workspaceYaml) {
     let doc;
     try {
-      doc = (0, import_yaml2.parse)(workspaceYaml, { maxAliasCount: 0 });
+      doc = (0, import_yaml3.parse)(workspaceYaml, { maxAliasCount: 0 });
     } catch {
       return "pnpm-workspace.yaml is unparseable";
     }
@@ -18222,6 +18314,11 @@ var servicePaths = {
   quarantineList: (owner, repo) => `/v1/ledger/quarantine/${seg(owner)}/${seg(repo)}`,
   /** POST (OIDC): the step's per-test results (`tensile.ci-upload`, docs/spec/ledger.md §6.1). */
   ledgerUploads: "/v1/ledger/uploads",
+  /**
+   * POST (OIDC): the step's selection record (`tensile.selection-record`, ledger §8.1). 202 `{id}` once recorded; an
+   * enforced decision is posted here before it takes effect (bindDecision), and its outcome after the job.
+   */
+  selectionRecords: "/v1/ledger/selection-records",
   /** POST (OIDC): the step's quarantine override record (`tensile.quarantine-record`), recorded as a claim. */
   quarantineRecords: "/v1/ledger/quarantine-records",
   /** POST a DecisionPayload: any 2xx (body optional, DecisionAck when present). */
@@ -18338,6 +18435,29 @@ function envKey(workflow, jobKey2, matrix, runner) {
 var sha256 = (s) => createHash3("sha256").update(s).digest("hex");
 
 // src/step/ledger-inputs.ts
+var MAX_LANDING_LIST = 500;
+var strList = (v, what) => {
+  if (!Array.isArray(v) || v.length > MAX_LANDING_LIST || v.some((x) => typeof x !== "string" || x.length > 1e3))
+    throw new Error(`the landing mode's ${what} is not a list of names`);
+  return v;
+};
+function parseLanding(v) {
+  if (!isObj4(v)) throw new Error("the landing mode is not an object");
+  if (v.mode !== "queue" && v.mode !== "no_queue" && v.mode !== "unknown")
+    throw new Error(`unknown landing mode ${JSON.stringify(v.mode)}`);
+  if (typeof v.defaultBranch !== "string" || !v.defaultBranch)
+    throw new Error("the landing mode names no default branch");
+  if (v.readAt !== null && (typeof v.readAt !== "string" || !Number.isFinite(Date.parse(v.readAt))))
+    throw new Error("the landing mode has no valid readAt");
+  return {
+    mode: v.mode,
+    defaultBranch: v.defaultBranch,
+    requiredChecks: v.requiredChecks === null ? null : strList(v.requiredChecks, "required checks"),
+    landingBranches: strList(v.landingBranches, "landing branches"),
+    queuePrefixes: strList(v.queuePrefixes, "queue prefixes"),
+    readAt: v.readAt
+  };
+}
 var MAX_INPUT_FILES = 5e4;
 var DAY = /^\d{4}-\d{2}-\d{2}$/;
 var isObj4 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
@@ -18377,7 +18497,12 @@ function parseLedgerInputs(v) {
       throw new Error("a ledger history entry is not {file, failedAt}");
     history.push({ file: h.file, failedAt: h.failedAt });
   }
-  return { until: v.until, durations, history };
+  return {
+    until: v.until,
+    durations,
+    history,
+    landing: v.landing === void 0 || v.landing === null ? null : parseLanding(v.landing)
+  };
 }
 
 // src/service.ts
@@ -18410,6 +18535,24 @@ async function fetchSelectInputs(t, token, until) {
   }
   if (v.until !== until) throw new ServiceError(`GET ${path}: the answer is for ${v.until}, not ${until}`);
   return v;
+}
+async function bindDecision(t, token, record) {
+  const path = servicePaths.selectionRecords;
+  const res = await call(
+    `POST ${path}`,
+    base2(t) + path,
+    {
+      method: "POST",
+      headers: { ...auth(token), "Content-Type": "application/json" },
+      body: JSON.stringify(record)
+    },
+    t.timeoutMs
+  );
+  const body2 = await res.json().catch(() => null);
+  const id = body2?.id;
+  if (typeof id !== "string" || !id || id.length > 200)
+    throw new ServiceError(`POST ${path}: no decision id in the answer`);
+  return id;
 }
 async function fetchQuarantine(t, token) {
   const path = servicePaths.quarantine(t.owner, t.repo);
@@ -20282,6 +20425,10 @@ function decideOverride(x) {
     );
   if (x.event !== "pull_request")
     reasons.push(`a ${x.event || "unknown"} event: only pull requests are ever turned green`);
+  else if (!x.landsOn?.base || !x.landsOn.defaultBranch || x.landsOn.base !== x.landsOn.defaultBranch)
+    reasons.push(
+      `the pull request lands on ${x.landsOn?.base ?? "an unknown branch"}, not the default branch (${x.landsOn?.defaultBranch ?? "unknown"}) the landing mode is read for`
+    );
   const reports = x.results.reports;
   if (!reports.length) reasons.push("no test report configured");
   if (!x.dated) reasons.push("no select-phase decision in this job: the reports can't be dated to this run");
@@ -20438,13 +20585,14 @@ async function sendOverrideRecord(env, sink, record, opts = {}) {
   try {
     url = parseServiceUrl(getInput(env, "service-url"));
   } catch {
-    return "failed";
+    return { status: "failed", id: null };
   }
-  if (!url || !env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) return "skipped";
+  if (!url || !env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)
+    return { status: "skipped", id: null };
   const timeoutMs = opts.timeoutMs ?? 1e4;
   try {
     const token = await oidcToken(env, timeoutMs);
-    await call(
+    const res = await call(
       `POST ${servicePaths.quarantineRecords}`,
       url.replace(/\/+$/, "") + servicePaths.quarantineRecords,
       {
@@ -20454,11 +20602,24 @@ async function sendOverrideRecord(env, sink, record, opts = {}) {
       },
       timeoutMs
     );
-    return "sent";
+    const body2 = await res.json().catch(() => null);
+    const id = typeof body2?.id === "string" && body2.id && body2.id.length <= 200 ? body2.id : null;
+    return { status: "sent", id };
   } catch (e) {
     sink.warning(`quarantine record not sent: ${e.message}`);
-    return "failed";
+    return { status: "failed", id: null };
   }
+}
+function landsOnOf(env) {
+  let ev = {};
+  try {
+    ev = readEvent(env);
+  } catch {
+  }
+  return {
+    base: env.GITHUB_BASE_REF || ev.pull_request?.base?.ref || null,
+    defaultBranch: ev.repository?.default_branch ?? null
+  };
 }
 function requestedMode(env) {
   const v = getInput(env, "quarantine-mode").toLowerCase();
@@ -20523,6 +20684,7 @@ async function runOverride(env, sink, d, results, deps) {
       env: stepEnv(env, d),
       now,
       dated: deps.dated,
+      landsOn: landsOnOf(env),
       runnerProblems: deps.runnerProblems ?? []
     };
     const o = decideOverride(input);
@@ -20584,7 +20746,8 @@ function ledgerDecision(d) {
     // The low-risk scope's facts (app modules/scopes.ts): kept only when they fit, else dropped (out of scope).
     ...d.scope && Buffer.byteLength(JSON.stringify(d.scope)) <= 24 * 1024 && { scope: d.scope },
     ...d.fullSuite && { fullSuite: d.fullSuite },
-    ...d.inputs && { inputs: d.inputs }
+    ...d.inputs && { inputs: d.inputs },
+    ...d.landing && { landing: d.landing }
   };
   const withLists = { ...base3, ...lists, listsComplete: true };
   const proposed = Buffer.byteLength(JSON.stringify(withLists)) <= MAX_PROPOSED_BYTES ? withLists : { ...base3, selected: null, sampled: null, listsComplete: false };
@@ -20963,8 +21126,15 @@ async function runResultsAndOverride(env, sink, decisionFile, opts) {
       runnerProblems: runnerProblems(d.runner, [resolve5(repo, d.root || "."), resolve5(repo)]),
       shadowOnly: sharded ? "a sharded leg never applies the override (docs/design/sharding.md)" : null
     });
-    if (r.record) await sendOverrideRecord(env, sink, r.record);
+    const sent = r.record ? await sendOverrideRecord(env, sink, r.record) : null;
     if (!opts.canEnforce) return 0;
+    if (r.mode.applied && testOutcome !== "success" && !sent?.id) {
+      process.stdout.write(
+        `::error title=Tensile::the tests failed; the quarantine override would pass the job, but the service didn't record it (no record, no action), so the job stays red
+`
+      );
+      return 1;
+    }
     if (r.exit !== 0)
       process.stdout.write(
         `::error title=Tensile::the tests failed${r.override.reasons.length ? ` (${escapeCommand(r.override.reasons[0])})` : ""}; quarantine-mode enforce keeps the job red
@@ -21205,6 +21375,23 @@ function inputRecord(path, until) {
   }
   return until ? { source: "ledger", sha256: inputDigest(text), entries, until } : { source: "file", sha256: inputDigest(text), entries };
 }
+var MAX_WORKFLOW_BYTES = 1024 * 1024;
+function checkNames(env, inputs) {
+  const job = env.GITHUB_JOB ?? "";
+  if (!inputs.workflow || !job) return null;
+  for (const dir of new Set(
+    [env.GITHUB_WORKSPACE, inputs.workingDirectory].filter((d) => !!d)
+  )) {
+    try {
+      const p = resolve6(dir, inputs.workflow);
+      const text = readFileSync9(p);
+      if (text.length > MAX_WORKFLOW_BYTES) return null;
+      return jobCheckNames(text.toString("utf8"), job);
+    } catch {
+    }
+  }
+  return null;
+}
 var ARGS_BUDGET = 200 * 1024;
 function baseDecision(env, inputs, event) {
   return {
@@ -21341,12 +21528,23 @@ async function decideStep(env, deps) {
     return full(`the ledger is stale (${decision.ledger.reasons.join("; ") || "behind"})`, decision);
   const fromLedger = { durations: inputs.durations === "ledger", history: inputs.history === "ledger" };
   let until = null;
+  let li = null;
+  let liProblem = "no service-url (or no id-token: write)";
+  if (target && token) {
+    until = utcDay(now());
+    try {
+      li = await fetchSelectInputs(target, token, until);
+    } catch (e) {
+      liProblem = e.message;
+    }
+  }
+  const landing = deps.landing !== void 0 ? deps.landing : li?.landing ?? null;
+  if (target && token && !li) warnings.push(`landing mode: ${liProblem}; every job counts as required`);
   if (fromLedger.durations || fromLedger.history) {
     if (!target || !token)
       return full("durations or history is ledger, which needs service-url (and id-token: write)", decision);
-    until = utcDay(now());
+    if (!li) return full(`could not read the ledger's durations and history: ${liProblem}`, decision);
     try {
-      const li = await fetchSelectInputs(target, token, until);
       const dir = join4(env.RUNNER_TEMP || tmpdir2(), "tensile");
       mkdirSync4(dir, { recursive: true });
       if (fromLedger.durations) {
@@ -21365,6 +21563,16 @@ async function decideStep(env, deps) {
     durations: inputRecord(inputs.durations, fromLedger.durations ? until : null),
     history: inputRecord(inputs.history, fromLedger.history ? until : null)
   };
+  const evName = env.GITHUB_EVENT_NAME ?? "";
+  const ref = env.GITHUB_REF ?? "";
+  if (!fullSuite && (evName === "push" || evName === "workflow_dispatch" || evName === "repository_dispatch") && ref.startsWith("refs/heads/")) {
+    const branch = ref.slice("refs/heads/".length);
+    const why2 = landingBranchReason(branch, landing);
+    if (why2) {
+      fullSuite = `${evName} on ${branch}: a landing run runs everything (${why2})`;
+      decision.fullSuite = fullSuite;
+    }
+  }
   const source = inputs.map ? { kind: "file", path: inputs.map, signature: inputs.mapSignature } : target && token ? { kind: "service", target, token } : { kind: "none" };
   let w;
   try {
@@ -21429,6 +21637,16 @@ async function decideStep(env, deps) {
       `the test list needs ${Math.round(Buffer.byteLength(list3.args) / 1024)} KB, over the output budget`
     );
   if (!decision.runAll && !decision.skipped.length) blockers.push("nothing is skipped");
+  const landsOn = targetBranch(env, event);
+  const req = requiredJob(landing, landsOn, checkNames(env, inputs));
+  decision.landing = {
+    mode: landing?.mode ?? "unknown",
+    readAt: landing?.readAt ?? null,
+    target: landsOn,
+    required: req.required,
+    why: req.why
+  };
+  if (req.required) blockers.push(`the landing gate runs in full: ${req.why}`);
   decision.enforceable = blockers.length === 0;
   decision.enforceBlockers = blockers;
   const why = [];
@@ -21454,6 +21672,16 @@ async function decideStep(env, deps) {
   decision.mode = why.length ? "shadow" : "enforce";
   decision.modeReason = inputs.mode === "enforce" && why.length ? why.join("; ") : null;
   decision.timings.stepMs = Math.round(performance.now() - start2);
+  if (decision.mode === "enforce" && !decision.runAll) {
+    try {
+      if (!target || !token) throw new Error("no service to record it with");
+      decision.bound = { decisionId: await bindDecision(target, token, selectionRecord(decision, [])) };
+    } catch (e) {
+      decision.mode = "shadow";
+      decision.modeReason = `no record, no action: the service didn't record the decision before it took effect (${e.message.slice(0, 200)})`;
+      decision.timings.stepMs = Math.round(performance.now() - start2);
+    }
+  }
   if (decision.mode !== "enforce" || decision.runAll)
     return {
       decision,

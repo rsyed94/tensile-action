@@ -228979,6 +228979,7 @@ function summarize(status, findings, changes, mutants, policy) {
 }
 
 // src/context.ts
+var import_yaml3 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync14 } from "node:fs";
 function isForkPr(event) {
   const head = event.pull_request?.head?.repo?.full_name;
@@ -229501,7 +229502,7 @@ var MAX_POLICY_BYTES = 64 * 1024;
 var isWorkflowFile = (p) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(p);
 
 // src/policy.ts
-var import_yaml3 = __toESM(require_dist(), 1);
+var import_yaml4 = __toESM(require_dist(), 1);
 import { createHash as createHash5 } from "node:crypto";
 var MAX_ALIASES = 1e3;
 var YamlError = class extends Error {
@@ -229512,25 +229513,25 @@ var YamlError = class extends Error {
     this.kind = kind;
   }
 };
-function parseYaml(text, maxBytes = MAX_YAML_BYTES, opts = {}) {
+function parseYaml2(text, maxBytes = MAX_YAML_BYTES, opts = {}) {
   if (Buffer.byteLength(text) > maxBytes) throw new YamlError(`larger than ${maxBytes / 1024} KB`, "size");
   try {
-    const doc = (0, import_yaml3.parseDocument)(text, {
+    const doc = (0, import_yaml4.parseDocument)(text, {
       uniqueKeys: false,
       prettyErrors: false,
       ...opts.strings && { schema: "failsafe" }
     });
     if (doc.errors.length) throw new YamlError(doc.errors[0].message.split("\n")[0], "syntax");
     let dup = null;
-    (0, import_yaml3.visit)(doc, {
+    (0, import_yaml4.visit)(doc, {
       Map(_, node) {
-        if (!(0, import_yaml3.isMap)(node)) return;
+        if (!(0, import_yaml4.isMap)(node)) return;
         const seen = /* @__PURE__ */ new Set();
         for (const pair of node.items) {
-          const k = (0, import_yaml3.isScalar)(pair.key) ? String(pair.key.value) : JSON.stringify(pair.key ?? null);
+          const k = (0, import_yaml4.isScalar)(pair.key) ? String(pair.key.value) : JSON.stringify(pair.key ?? null);
           if (seen.has(k)) {
             dup = k;
-            return import_yaml3.visit.BREAK;
+            return import_yaml4.visit.BREAK;
           }
           seen.add(k);
         }
@@ -229569,7 +229570,7 @@ function parsePolicy(text) {
   if (text === null) return { policy, problems };
   let raw2;
   try {
-    raw2 = parseYaml(text, 64 * 1024);
+    raw2 = parseYaml2(text, 64 * 1024);
   } catch (e) {
     return { policy, problems: [`${POLICY_PATH} is not valid YAML: ${e.message}`] };
   }
@@ -229626,7 +229627,7 @@ function policyHash(p) {
 var MAX_CHANGED_FILES = 3e3;
 var MATCH_BUDGET = 5e7;
 function parseWorkflow(text) {
-  const raw2 = parseYaml(text, MAX_YAML_BYTES, { strings: true });
+  const raw2 = parseYaml2(text, MAX_YAML_BYTES, { strings: true });
   if (!isRecord(raw2)) throw new Error("not a mapping");
   const onRaw = raw2.on;
   const on = /* @__PURE__ */ new Map();
