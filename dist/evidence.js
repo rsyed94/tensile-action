@@ -187682,7 +187682,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         return ts_textChanges_exports.ChangeTracker.with(
           { host, formatContext, preferences },
           (changeTracker) => {
-            const parsed = contents.map((c) => parse3(sourceFile, c));
+            const parsed = contents.map((c) => parse4(sourceFile, c));
             const flattenedLocations = focusLocations && flatten(focusLocations);
             for (const nodes of parsed) {
               placeNodeGroup(
@@ -187695,7 +187695,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           }
         );
       }
-      function parse3(sourceFile, content) {
+      function parse4(sourceFile, content) {
         const nodeKinds = [
           {
             parse: () => createSourceFile(
@@ -218802,7 +218802,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse3(src, reviver, options) {
+    function parse4(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -218843,7 +218843,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse3;
+    exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments2;
     exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
@@ -219407,8 +219407,17 @@ var BUILTINS = new Set(builtinModules);
 // ../engine/src/globs.ts
 var MAX_BYTES = 2 * 1024 * 1024;
 
+// ../engine/src/graph/util.ts
+var MAX_CONFIG_BYTES = 4 * 1024 * 1024;
+
 // ../engine/src/lockfile.ts
+var import_yaml2 = __toESM(require_dist(), 1);
+
+// ../engine/src/graph/locks.ts
 var import_yaml = __toESM(require_dist(), 1);
+var MAX_LOCK_BYTES = 32 * 1024 * 1024;
+
+// ../engine/src/lockfile.ts
 var MAX_LOCKFILE_BYTES = 32 * 1024 * 1024;
 
 // ../engine/src/spans/python.ts
@@ -224187,7 +224196,7 @@ if (!nativeBinding) {
   }
   throw new Error(`Failed to load native binding`);
 }
-var { Severity, ParseResult, ExportExportNameKind, ExportImportNameKind, ExportLocalNameKind, ImportNameKind, parse: parse2, parseSync, rawTransferSupported } = nativeBinding;
+var { Severity, ParseResult, ExportExportNameKind, ExportImportNameKind, ExportLocalNameKind, ImportNameKind, parse: parse3, parseSync, rawTransferSupported } = nativeBinding;
 var { getBufferOffset, parseRaw, parseRawSync } = nativeBinding;
 
 // ../../node_modules/.pnpm/oxc-parser@0.157.0/node_modules/oxc-parser/src-js/generated/visit/keys.js
@@ -224760,7 +224769,7 @@ function compareRan(file, base, head, elsewhere, renames) {
 var import_typescript9 = __toESM(require_typescript(), 1);
 import { existsSync as existsSync5, readFileSync as readFileSync9 } from "node:fs";
 import { isBuiltin } from "node:module";
-import { dirname as dirname5, join as join8, normalize } from "node:path";
+import { dirname as dirname5, join as join8, normalize as normalize2 } from "node:path";
 
 // ../mutate/src/aliases.ts
 var import_typescript8 = __toESM(require_typescript(), 1);
@@ -225953,7 +225962,7 @@ var ImportGraph = class {
     this.tests = this.findTests();
   }
   tryFile(p) {
-    const n = normalize(p).replace(/^\.\//, "");
+    const n = normalize2(p).replace(/^\.\//, "");
     if (this.fileSet.has(n) && (JS2.test(n) || SFC.test(n))) return n;
     const stem = n.replace(/\.(?:[cm]?js|jsx)$/, "");
     for (const e of EXTS) if (this.fileSet.has(stem + e)) return stem + e;
@@ -226003,7 +226012,7 @@ var ImportGraph = class {
     if (pkg) {
       const sub = m[2] ? `.${m[2]}` : ".";
       const target = pkg.exports.get(sub) ?? (m[2] ? sub : void 0);
-      return !(target && this.fileSet.has(normalize(join8(pkg.dir, target))));
+      return !(target && this.fileSet.has(normalize2(join8(pkg.dir, target))));
     }
     const types = name2.startsWith("@") ? `@types/${name2.slice(1).replace("/", "__")}` : `@types/${name2}`;
     for (let d = dirname5(join8(this.root, from)); ; d = dirname5(d)) {
@@ -226051,9 +226060,9 @@ var ImportGraph = class {
       else if (f) {
         if (!edges.includes(f)) edges.push(f);
         if (!c.viteOnly.includes(p) && !own.includes(f)) own.push(f);
-      } else if (this.fileSet.has(normalize(p)))
+      } else if (this.fileSet.has(normalize2(p)))
         asset = true;
-      else if ([".d.ts", ".d.mts", ".d.cts", "/index.d.ts"].some((e) => this.fileSet.has(normalize(p) + e)))
+      else if ([".d.ts", ".d.mts", ".d.cts", "/index.d.ts"].some((e) => this.fileSet.has(normalize2(p) + e)))
         declaration = true;
     }
     let external = false;
@@ -226425,14 +226434,14 @@ function cacheDir(root) {
   }
 }
 var isStrings = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
-var isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var isObj2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 function asBaseline(v) {
-  if (!isObj(v)) return null;
+  if (!isObj2(v)) return null;
   const { uncollected, findings, healthy, ms, coverage } = v;
-  if (!isStrings(uncollected) || !isStrings(healthy) || !isObj(ms) || !isObj(coverage)) return null;
+  if (!isStrings(uncollected) || !isStrings(healthy) || !isObj2(ms) || !isObj2(coverage)) return null;
   if (!Object.values(ms).every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)) return null;
   if (!Array.isArray(findings) || !findings.every(
-    (f) => isObj(f) && typeof f.type === "string" && typeof f.id === "string" && typeof f.title === "string" && typeof f.action === "string" && Array.isArray(f.evidence)
+    (f) => isObj2(f) && typeof f.type === "string" && typeof f.id === "string" && typeof f.title === "string" && typeof f.action === "string" && Array.isArray(f.evidence)
   ))
     return null;
   return {
@@ -226450,7 +226459,7 @@ function readBaseline(root, key) {
   try {
     if (!existsSync6(file) || statSync2(file).size > MAX_BYTES2) return null;
     const j = JSON.parse(readFileSync10(file, "utf8"));
-    if (!isObj(j) || j.v !== CACHE_VERSION || j.key !== key) throw new Error("mismatch");
+    if (!isObj2(j) || j.v !== CACHE_VERSION || j.key !== key) throw new Error("mismatch");
     const b = asBaseline(j.baseline);
     if (!b) throw new Error("partial");
     return b;
@@ -226539,7 +226548,7 @@ function prepareCoverage(dir, ctx) {
   writeFileSync3(join10(dir, "want.json"), JSON.stringify([...ctx.want].map((f) => join10(ctx.ws, f))));
 }
 function smcMapping(url, e) {
-  if (!isObj2(e)) throw new Bad("bad source-map-cache entry");
+  if (!isObj3(e)) throw new Bad("bad source-map-cache entry");
   return {
     lineLengths: asLineLengths(e.lineLengths),
     lineOffset: 0,
@@ -226557,26 +226566,26 @@ function readJson(path) {
   if (statSync3(path).size > MAX_BYTES3) throw new Bad("coverage file too large");
   return JSON.parse(readFileSync11(path, "utf8"));
 }
-var isObj2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var isObj3 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 var isNat = (v) => typeof v === "number" && Number.isInteger(v) && v >= 0;
 function asScripts(v) {
-  if (!isObj2(v) || !Array.isArray(v.result)) throw new Bad("not V8 coverage");
+  if (!isObj3(v) || !Array.isArray(v.result)) throw new Bad("not V8 coverage");
   for (const s of v.result)
-    if (!isObj2(s) || typeof s.url !== "string" || !Array.isArray(s.functions))
+    if (!isObj3(s) || typeof s.url !== "string" || !Array.isArray(s.functions))
       throw new Bad("bad script entry");
   return v.result;
 }
 function checkRanges(s) {
   for (const f of s.functions) {
-    if (!isObj2(f) || typeof f.functionName !== "string" || !Array.isArray(f.ranges))
+    if (!isObj3(f) || typeof f.functionName !== "string" || !Array.isArray(f.ranges))
       throw new Bad("bad function");
     for (const r of f.ranges)
-      if (!isObj2(r) || !isNat(r.startOffset) || !isNat(r.endOffset) || !isNat(r.count) || r.endOffset < r.startOffset)
+      if (!isObj3(r) || !isNat(r.startOffset) || !isNat(r.endOffset) || !isNat(r.count) || r.endOffset < r.startOffset)
         throw new Bad("bad range");
   }
 }
 function asMap(v) {
-  if (!isObj2(v) || !Array.isArray(v.sources) || typeof v.mappings !== "string")
+  if (!isObj3(v) || !Array.isArray(v.sources) || typeof v.mappings !== "string")
     throw new Bad("bad source map");
   if (v.sourcesContent !== void 0 && !Array.isArray(v.sourcesContent)) throw new Bad("bad source map");
   return v;
@@ -226674,7 +226683,7 @@ function readCoverage(dir, tests, ctx) {
       if (cov) {
         const j = readJson(path);
         const all2 = j["source-map-cache"] ?? {};
-        if (!isObj2(all2)) throw new Bad("bad source-map-cache");
+        if (!isObj3(all2)) throw new Bad("bad source-map-cache");
         const pid = Number(cov[1]);
         const every = asScripts(j);
         for (const s of every) {
@@ -226691,7 +226700,7 @@ function readCoverage(dir, tests, ctx) {
         procs.push({ pid, scripts, smc, tests: /* @__PURE__ */ new Set(), hooksThread });
       } else if (name2.startsWith("jiffy-proc-")) {
         const m = readJson(path);
-        if (!isObj2(m) || !isNat(m.pid) || !isNat(m.ppid) || !isNat(m.thread) || typeof m.covered !== "boolean" || typeof m.tag !== "string")
+        if (!isObj3(m) || !isNat(m.pid) || !isNat(m.ppid) || !isNat(m.thread) || typeof m.covered !== "boolean" || typeof m.tag !== "string")
           throw new Bad("bad process note");
         marks.push({
           pid: m.pid,
@@ -226703,15 +226712,15 @@ function readCoverage(dir, tests, ctx) {
         });
       } else if (name2.startsWith("jiffy-exit-")) {
         const m = readJson(path);
-        if (!isObj2(m) || typeof m.tag !== "string") throw new Bad("bad exit note");
+        if (!isObj3(m) || typeof m.tag !== "string") throw new Bad("bad exit note");
         exits.add(m.tag);
       } else if (name2.startsWith("jiffy-hidden-")) {
         const m = readJson(path);
-        if (!isObj2(m) || !isNat(m.pid)) throw new Bad("bad process note");
+        if (!isObj3(m) || !isNat(m.pid)) throw new Bad("bad process note");
         hidden.push({ pid: m.pid, cmd: String(m.cmd ?? ""), owner: ownerOf(m.owner) });
       } else if (name2.startsWith("jiffy-evaled-")) {
         const m = readJson(path);
-        if (!isObj2(m) || !isNat(m.pid)) throw new Bad("bad process note");
+        if (!isObj3(m) || !isNat(m.pid)) throw new Bad("bad process note");
         evaled.push({
           pid: m.pid,
           owner: ownerOf(m.owner),
@@ -226719,7 +226728,7 @@ function readCoverage(dir, tests, ctx) {
         });
       } else if (name2.startsWith("jiffy-src-")) {
         const m = readJson(path);
-        if (!isObj2(m) || !isNat(m.pid) || typeof m.url !== "string" || !isNat(m.length) || typeof m.map !== "string")
+        if (!isObj3(m) || !isNat(m.pid) || typeof m.url !== "string" || !isNat(m.length) || typeof m.map !== "string")
           throw new Bad("bad source note");
         const lineOffset = typeof m.lineOffset === "number" ? m.lineOffset : 0;
         const columnOffset = typeof m.columnOffset === "number" ? m.columnOffset : 0;
@@ -226840,7 +226849,7 @@ function merge(a, b) {
   return {
     executed: /* @__PURE__ */ new Set([...a.executed, ...b.executed]),
     mapped: a.mapped && b.mapped ? /* @__PURE__ */ new Set([...a.mapped, ...b.mapped]) : a.mapped ? b.mapped : a.mapped,
-    spans: a.spans && b.spans ? normalize2([...a.spans, ...b.spans]) : null
+    spans: a.spans && b.spans ? normalize3([...a.spans, ...b.spans]) : null
   };
 }
 function scriptLength(s) {
@@ -226973,7 +226982,7 @@ function executedSpans(s, length) {
   }
   return out2;
 }
-function normalize2(spans) {
+function normalize3(spans) {
   const sorted = [...spans].sort((a, b) => a[0] - b[0]);
   const out2 = [];
   for (const [a, b] of sorted) {
@@ -227138,21 +227147,21 @@ function coverageToJson(c) {
   return { complete: c.complete, ...c.why ? { why: c.why } : {}, files };
 }
 function coverageFromJson(j) {
-  if (!isObj2(j) || typeof j.complete !== "boolean" || !isObj2(j.files)) throw new Bad("bad coverage record");
+  if (!isObj3(j) || typeof j.complete !== "boolean" || !isObj3(j.files)) throw new Bad("bad coverage record");
   const lines = (v) => {
     if (!Array.isArray(v) || !v.every((n) => isNat(n) && n > 0)) throw new Bad("bad coverage lines");
     return new Set(v);
   };
   const files = /* @__PURE__ */ new Map();
   for (const [f, v] of Object.entries(j.files)) {
-    if (!isObj2(v)) throw new Bad("bad coverage file");
+    if (!isObj3(v)) throw new Bad("bad coverage file");
     const spans = v.spans;
     if (spans !== null && !(Array.isArray(spans) && spans.every((s) => Array.isArray(s) && s.length === 2 && isNat(s[0]) && isNat(s[1]) && s[0] < s[1])))
       throw new Bad("bad coverage spans");
     files.set(f, {
       executed: lines(v.executed),
       mapped: v.mapped === null ? null : lines(v.mapped),
-      spans: spans === null ? null : normalize2(spans)
+      spans: spans === null ? null : normalize3(spans)
     });
   }
   return {
@@ -229436,7 +229445,7 @@ function compiled(pattern) {
   }
   return nfa;
 }
-function globMatch(pattern, text, budget) {
+function globMatch2(pattern, text, budget) {
   const { nodes, accept } = compiled(pattern);
   const n = nodes.length;
   const close = (set) => {
@@ -229476,7 +229485,7 @@ function included(patterns, text, budget) {
   let inc = false;
   for (const p of patterns) {
     const neg = p.startsWith("!");
-    if (globMatch(neg ? p.slice(1) : p, text, budget)) inc = !neg;
+    if (globMatch2(neg ? p.slice(1) : p, text, budget)) inc = !neg;
   }
   return inc;
 }
@@ -229492,7 +229501,7 @@ var MAX_POLICY_BYTES = 64 * 1024;
 var isWorkflowFile = (p) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(p);
 
 // src/policy.ts
-var import_yaml2 = __toESM(require_dist(), 1);
+var import_yaml3 = __toESM(require_dist(), 1);
 import { createHash as createHash5 } from "node:crypto";
 var MAX_ALIASES = 1e3;
 var YamlError = class extends Error {
@@ -229506,22 +229515,22 @@ var YamlError = class extends Error {
 function parseYaml(text, maxBytes = MAX_YAML_BYTES, opts = {}) {
   if (Buffer.byteLength(text) > maxBytes) throw new YamlError(`larger than ${maxBytes / 1024} KB`, "size");
   try {
-    const doc = (0, import_yaml2.parseDocument)(text, {
+    const doc = (0, import_yaml3.parseDocument)(text, {
       uniqueKeys: false,
       prettyErrors: false,
       ...opts.strings && { schema: "failsafe" }
     });
     if (doc.errors.length) throw new YamlError(doc.errors[0].message.split("\n")[0], "syntax");
     let dup = null;
-    (0, import_yaml2.visit)(doc, {
+    (0, import_yaml3.visit)(doc, {
       Map(_, node) {
-        if (!(0, import_yaml2.isMap)(node)) return;
+        if (!(0, import_yaml3.isMap)(node)) return;
         const seen = /* @__PURE__ */ new Set();
         for (const pair of node.items) {
-          const k = (0, import_yaml2.isScalar)(pair.key) ? String(pair.key.value) : JSON.stringify(pair.key ?? null);
+          const k = (0, import_yaml3.isScalar)(pair.key) ? String(pair.key.value) : JSON.stringify(pair.key ?? null);
           if (seen.has(k)) {
             dup = k;
-            return import_yaml2.visit.BREAK;
+            return import_yaml3.visit.BREAK;
           }
           seen.add(k);
         }
@@ -229748,13 +229757,13 @@ function allowEntry(dispatch, path, names2) {
   ) ?? null;
 }
 function plan(cache2, opts) {
-  const parse3 = (t) => {
+  const parse4 = (t) => {
     if (t === void 0) return null;
     const p = cache2.get(t);
     return p instanceof Error ? null : p;
   };
-  const b = parse3(opts.base);
-  const h = parse3(opts.dispatchHead);
+  const b = parse4(opts.base);
+  const h = parse4(opts.dispatchHead);
   const entry = allowEntry(opts.dispatch, opts.path, [b?.name ?? null, h?.name ?? null]);
   if (!entry) return { allowed: false, reason: "not listed in main_only_dispatch" };
   if (opts.fork) return { allowed: false, reason: "pull request from a fork" };

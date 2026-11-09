@@ -7267,7 +7267,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse3(src, reviver, options) {
+    function parse4(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -7308,7 +7308,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse3;
+    exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments2;
     exports.parseDocument = parseDocument;
     exports.stringify = stringify;
@@ -7386,6 +7386,7 @@ function readEvent(env) {
   if (!p) return {};
   return JSON.parse(readFileSync(p, "utf8"));
 }
+var MERGE_QUEUE_BRANCH = /^(gh-readonly-queue\/|trunk-merge\/|trunk-temp\/|mergify\/merge-queue\/|gtmq_|mq-tmp-|automation\/bors\/|staging$|staging\.tmp$|trying$|auto$)/;
 function planFor(env, event, baseOverride) {
   const name2 = env.GITHUB_EVENT_NAME ?? "";
   if (name2 === "merge_group")
@@ -7405,6 +7406,11 @@ function planFor(env, event, baseOverride) {
     if (branch === defaultBranch) return { kind: "full", reason: `${what} ${branch}: full suite and matrix` };
     if (/^releases?\//.test(branch))
       return { kind: "full", reason: `${what} ${branch}: release branches run everything` };
+    if (MERGE_QUEUE_BRANCH.test(branch))
+      return {
+        kind: "full",
+        reason: `${what} ${branch}: merge queue branches run everything (the landing run)`
+      };
   }
   const isPr = name2 === "pull_request" || name2 === "pull_request_target";
   let expectHead;
@@ -8228,9 +8234,8 @@ function underDirs(path, dirs) {
   return dirs === null || dirs.some((d) => d === "" || path.startsWith(d + "/"));
 }
 
-// ../engine/src/lockfile.ts
-var import_yaml = __toESM(require_dist(), 1);
-var MAX_LOCKFILE_BYTES = 32 * 1024 * 1024;
+// ../engine/src/graph/util.ts
+var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 var dirOf3 = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
 var baseOf2 = (p) => p.slice(p.lastIndexOf("/") + 1);
 function normalize3(p) {
@@ -8244,22 +8249,502 @@ function normalize3(p) {
   }
   return out2.join("/");
 }
-var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+var MAX_CONFIG_BYTES = 4 * 1024 * 1024;
+function parseJsonc(text) {
+  if (text.length > MAX_CONFIG_BYTES) throw new Error(`over ${MAX_CONFIG_BYTES} bytes`);
+  let out2 = "";
+  let i2 = 0;
+  const n = text.length;
+  while (i2 < n) {
+    const c = text[i2];
+    if (c === '"') {
+      let j = i2 + 1;
+      while (j < n && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out2 += text.slice(i2, j + 1);
+      i2 = j + 1;
+    } else if (c === "/" && text[i2 + 1] === "/") {
+      while (i2 < n && text[i2] !== "\n") i2++;
+    } else if (c === "/" && text[i2 + 1] === "*") {
+      const end = text.indexOf("*/", i2 + 2);
+      if (end < 0) throw new Error("unterminated comment");
+      i2 = end + 2;
+    } else {
+      out2 += c;
+      i2++;
+    }
+  }
+  let clean = "";
+  for (let k = 0; k < out2.length; k++) {
+    const c = out2[k];
+    if (c === '"') {
+      let j = k + 1;
+      while (j < out2.length && out2[j] !== '"') j += out2[j] === "\\" ? 2 : 1;
+      clean += out2.slice(k, j + 1);
+      k = j;
+      continue;
+    }
+    if (c === ",") {
+      let j = k + 1;
+      while (j < out2.length && /\s/.test(out2[j])) j++;
+      if (out2[j] === "}" || out2[j] === "]") continue;
+    }
+    clean += c;
+  }
+  return JSON.parse(clean);
+}
+var MAX_GLOB_LENGTH = 512;
+var MAX_ALTERNATIVES = 64;
+function expandBraces(g) {
+  const open = g.indexOf("{");
+  if (open < 0) {
+    if (g.includes("}")) throw new Error(`unbalanced } in ${g}`);
+    return [g];
+  }
+  let depth = 0;
+  const parts2 = [];
+  let start2 = open + 1;
+  for (let i2 = open; i2 < g.length; i2++) {
+    const c = g[i2];
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        parts2.push(g.slice(start2, i2));
+        const out2 = [];
+        for (const p of parts2)
+          for (const rest of expandBraces(g.slice(0, open) + p + g.slice(i2 + 1))) {
+            out2.push(rest);
+            if (out2.length > MAX_ALTERNATIVES)
+              throw new Error(`over ${MAX_ALTERNATIVES} alternatives in ${g}`);
+          }
+        return out2;
+      }
+    } else if (c === "," && depth === 1) {
+      parts2.push(g.slice(start2, i2));
+      start2 = i2 + 1;
+    }
+  }
+  throw new Error(`unbalanced { in ${g}`);
+}
+function tokenize(g) {
+  const out2 = [];
+  for (let i2 = 0; i2 < g.length; i2++) {
+    const c = g[i2];
+    if (c === "*") {
+      if (g[i2 + 1] === "*") {
+        while (g[i2 + 1] === "*") i2++;
+        const dirs = g[i2 + 1] === "/";
+        if (dirs) i2++;
+        const prev = out2.at(-1);
+        if (!(prev?.t === "globstar" && prev.dirs && dirs)) out2.push({ t: "globstar", dirs });
+      } else if (out2.at(-1)?.t !== "star") out2.push({ t: "star" });
+    } else if (c === "?") out2.push({ t: "one", test: (x) => x !== "/" });
+    else if (c === "[") {
+      const end = g.indexOf("]", i2 + 2);
+      if (end < 0) {
+        out2.push({ t: "lit", c });
+        continue;
+      }
+      let body2 = g.slice(i2 + 1, end);
+      const neg = body2.startsWith("!") || body2.startsWith("^");
+      if (neg) body2 = body2.slice(1);
+      const ranges = [];
+      for (let k = 0; k < body2.length; k++)
+        if (body2[k + 1] === "-" && k + 2 < body2.length) {
+          ranges.push([body2[k], body2[k + 2]]);
+          k += 2;
+        } else ranges.push([body2[k], body2[k]]);
+      out2.push({ t: "one", test: (x) => x !== "/" && ranges.some(([a, b]) => a <= x && x <= b) !== neg });
+      i2 = end;
+    } else out2.push({ t: "lit", c });
+  }
+  return out2;
+}
+function matchTokens(toks, path) {
+  const n = path.length;
+  const memo = new Uint8Array((toks.length + 1) * (n + 1));
+  const go = (i2, j) => {
+    const k = i2 * (n + 1) + j;
+    if (memo[k]) return memo[k] === 1;
+    let r;
+    if (i2 === toks.length) r = j === n || path[j] === "/";
+    else {
+      const tok = toks[i2];
+      if (tok.t === "lit") r = j < n && path[j] === tok.c && go(i2 + 1, j + 1);
+      else if (tok.t === "one") r = j < n && tok.test(path[j]) && go(i2 + 1, j + 1);
+      else if (tok.t === "star") r = go(i2 + 1, j) || j < n && path[j] !== "/" && go(i2, j + 1);
+      else if (tok.dirs)
+        r = go(i2 + 1, j) || j < n && (() => {
+          const slash = path.indexOf("/", j);
+          return slash >= 0 && go(i2, slash + 1);
+        })();
+      else r = go(i2 + 1, j) || j < n && go(i2, j + 1);
+    }
+    memo[k] = r ? 1 : 2;
+    return r;
+  };
+  return go(0, 0);
+}
+var compiled = /* @__PURE__ */ new Map();
+function compileGlob(glob) {
+  const hit = compiled.get(glob);
+  if (hit) return hit;
+  if (glob.length > MAX_GLOB_LENGTH) throw new Error(`glob over ${MAX_GLOB_LENGTH} characters`);
+  const g = glob.replace(/^\.\//, "").replace(/\/+$/, "");
+  const out2 = expandBraces(g).map(tokenize);
+  if (compiled.size > 1e4) compiled.clear();
+  compiled.set(glob, out2);
+  return out2;
+}
+function globMatch(glob, path) {
+  if (glob.startsWith("!")) return false;
+  return compileGlob(glob).some((t) => matchTokens(t, path));
+}
+
+// ../engine/src/lockfile.ts
+var import_yaml2 = __toESM(require_dist(), 1);
+
+// ../engine/src/graph/locks.ts
+var import_yaml = __toESM(require_dist(), 1);
+var MAX_LOCK_BYTES = 32 * 1024 * 1024;
+var Unattributable = class extends Error {
+};
 function canon(v) {
   if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`;
   if (isObj(v))
     return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(",")}}`;
   return JSON.stringify(v) ?? "null";
 }
+function closure(g, dir) {
+  const own = /* @__PURE__ */ new Map();
+  const links = /* @__PURE__ */ new Set();
+  const start2 = g.workspaces.get(dir);
+  const stack = [];
+  for (const d of g.deps(start2)) {
+    if ("link" in d) links.add(d.link);
+    else stack.push(d.key);
+  }
+  while (stack.length) {
+    const k = stack.pop();
+    if (own.has(k)) continue;
+    own.set(k, g.entries.get(k) ?? "null");
+    for (const d of g.deps(k)) {
+      if ("link" in d) links.add(d.link);
+      else stack.push(d.key);
+    }
+  }
+  return { own, links };
+}
+function sameMap(a, b) {
+  if (!a || !b || a.size !== b.size) return false;
+  for (const [k, v] of a) if (b.get(k) !== v) return false;
+  return true;
+}
+function diffGraphs(a, b) {
+  if (a.shared !== b.shared) return "a shared section (settings, metadata) changed";
+  try {
+    const dirs = [.../* @__PURE__ */ new Set([...a.workspaces.keys(), ...b.workspaces.keys()])];
+    const ca = new Map([...a.workspaces.keys()].map((d) => [d, closure(a, d)]));
+    const cb = new Map([...b.workspaces.keys()].map((d) => [d, closure(b, d)]));
+    const direct = /* @__PURE__ */ new Set();
+    for (const d of dirs) {
+      const ka = a.workspaces.get(d);
+      const kb = b.workspaces.get(d);
+      if (ka === void 0 || kb === void 0 || a.entries.get(ka) !== b.entries.get(kb) || !sameMap(ca.get(d)?.own, cb.get(d)?.own))
+        direct.add(d);
+    }
+    const viaLinks = /* @__PURE__ */ new Set();
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const d of dirs) {
+        if (direct.has(d) || viaLinks.has(d)) continue;
+        const links = [...ca.get(d)?.links ?? [], ...cb.get(d)?.links ?? []];
+        if (links.some((l) => direct.has(l) || viaLinks.has(l))) {
+          viaLinks.add(d);
+          grew = true;
+        }
+      }
+    }
+    const reached = (g, c) => {
+      const s = new Set(g.workspaces.values());
+      for (const x of c.values()) for (const k of x.own.keys()) s.add(k);
+      return s;
+    };
+    const ra = reached(a, ca);
+    const rb = reached(b, cb);
+    const changedNames = /* @__PURE__ */ new Set();
+    for (const k of /* @__PURE__ */ new Set([...a.entries.keys(), ...b.entries.keys()])) {
+      if (a.entries.get(k) === b.entries.get(k)) continue;
+      if (!(a.entries.has(k) && ra.has(k)) && !(b.entries.has(k) && rb.has(k)))
+        return `changed entry ${k} is reached by no workspace`;
+      const n = b.names.get(k) ?? a.names.get(k);
+      if (n) changedNames.add(n);
+    }
+    return { direct, viaLinks, changedNames: [...changedNames].sort(), importers: dirs };
+  } catch (e) {
+    if (e instanceof Unattributable) return `can't attribute: ${e.message}`;
+    throw e;
+  }
+}
+var NPM_IMPORTER_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies"
+];
+var NPM_ENTRY_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"];
+function npmResolve(packages, from, name2) {
+  for (let dir = from; ; ) {
+    const key = `${dir ? `${dir}/` : ""}node_modules/${name2}`;
+    if (key in packages) return key;
+    if (!dir) return null;
+    dir = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
+  }
+}
+function npmGraph(text) {
+  if (text.length > MAX_LOCK_BYTES) return `over ${MAX_LOCK_BYTES} bytes`;
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch (e) {
+    return `unparseable (${e.message.split("\n")[0]})`;
+  }
+  if (!isObj(doc)) return "not an object";
+  const v = doc.lockfileVersion;
+  if (v !== 2 && v !== 3) return `lockfileVersion ${JSON.stringify(v)} is not one we read (2, 3)`;
+  const packages = doc.packages;
+  if (!isObj(packages) || !isObj(packages[""])) return "no packages section";
+  const workspaces = /* @__PURE__ */ new Map();
+  const entries = /* @__PURE__ */ new Map();
+  const names2 = /* @__PURE__ */ new Map();
+  for (const [k, e] of Object.entries(packages)) {
+    if (!isObj(e)) return `entry ${k || "."} is malformed`;
+    entries.set(k, canon(e));
+    const nm = k.lastIndexOf("node_modules/");
+    names2.set(k, nm < 0 ? typeof e.name === "string" ? e.name : k : k.slice(nm + "node_modules/".length));
+    if (!/(^|\/)node_modules\//.test(k)) {
+      const d = normalize3(k);
+      if (d === null) return `entry ${k} climbs out of the repo`;
+      workspaces.set(d, k);
+    }
+  }
+  const deps = (key) => {
+    const e = packages[key];
+    const isWorkspace = !/(^|\/)node_modules\//.test(key);
+    const out2 = [];
+    const meta = isObj(e.peerDependenciesMeta) ? e.peerDependenciesMeta : {};
+    for (const f of isWorkspace ? NPM_IMPORTER_FIELDS : NPM_ENTRY_FIELDS) {
+      const d = e[f];
+      if (d === void 0) continue;
+      if (!isObj(d)) throw new Unattributable(`${key || "."}: ${f} malformed`);
+      for (const n of Object.keys(d)) {
+        const r = npmResolve(packages, key, n);
+        if (r === null) {
+          if (f === "optionalDependencies" || f === "peerDependencies" || isObj(meta[n])) continue;
+          throw new Unattributable(`${key || "."}: ${n} has no entry`);
+        }
+        const t = packages[r];
+        if (t.link === true) {
+          const target = typeof t.resolved === "string" ? normalize3(t.resolved) : null;
+          if (target === null) throw new Unattributable(`${r} links nowhere`);
+          if (workspaces.has(target)) out2.push({ link: target });
+          else out2.push({ key: r });
+        } else out2.push({ key: r });
+      }
+    }
+    return out2;
+  };
+  const top = Object.fromEntries(
+    Object.entries(doc).filter(([k]) => k !== "packages" && k !== "dependencies" && k !== "version")
+  );
+  return { workspaces, entries, names: names2, deps, shared: canon(top) };
+}
+function npmLockDiff(oldText, newText) {
+  const a = npmGraph(oldText);
+  if (typeof a === "string") return `base lockfile ${a}`;
+  const b = npmGraph(newText);
+  if (typeof b === "string") return `head lockfile ${b}`;
+  return diffGraphs(a, b);
+}
+var descriptors = (key) => key.split(/,\s*/).map((s) => s.trim().replace(/^"|"$/g, "")).filter(Boolean);
+var descName = (d) => {
+  const at = d.indexOf("@", 1);
+  return at < 0 ? d : d.slice(0, at);
+};
+function berryGraph(doc) {
+  const byDesc = /* @__PURE__ */ new Map();
+  const workspaces = /* @__PURE__ */ new Map();
+  const entries = /* @__PURE__ */ new Map();
+  const names2 = /* @__PURE__ */ new Map();
+  for (const [k, e] of Object.entries(doc)) {
+    if (k === "__metadata") continue;
+    if (!isObj(e)) return `entry ${k} is malformed`;
+    entries.set(k, canon(e));
+    const ds = descriptors(k);
+    names2.set(k, descName(ds[0] ?? k));
+    for (const d of ds) byDesc.set(d, k);
+    const m = typeof e.resolution === "string" ? /@workspace:(.+)$/.exec(e.resolution) : null;
+    if (m) {
+      const dir = normalize3(m[1]);
+      if (dir === null) return `workspace ${m[1]} climbs out of the repo`;
+      workspaces.set(dir, k);
+    }
+  }
+  const workspaceOf = new Map([...workspaces].map(([d, k]) => [k, d]));
+  const deps = (key) => {
+    const e = doc[key];
+    const out2 = [];
+    const meta = isObj(e.dependenciesMeta) ? e.dependenciesMeta : {};
+    const fields = workspaceOf.has(key) ? ["dependencies", "peerDependencies"] : ["dependencies"];
+    for (const f of fields) {
+      const d = e[f];
+      if (d === void 0) continue;
+      if (!isObj(d)) throw new Unattributable(`${key}: ${f} malformed`);
+      for (const [n, range] of Object.entries(d)) {
+        const r = String(range);
+        const k = byDesc.get(`${n}@${r}`) ?? byDesc.get(`${n}@npm:${r}`);
+        if (!k) {
+          const opt = isObj(meta[n]) && meta[n].optional === true;
+          if (f === "peerDependencies" || opt) continue;
+          throw new Unattributable(`${key}: ${n}@${r} has no entry`);
+        }
+        const w = workspaceOf.get(k);
+        out2.push(w !== void 0 ? { link: w } : { key: k });
+      }
+    }
+    return out2;
+  };
+  return { workspaces, entries, names: names2, deps, shared: canon(doc.__metadata ?? null) };
+}
+function parseYarnClassic(text) {
+  const out2 = /* @__PURE__ */ new Map();
+  let cur = null;
+  let section = null;
+  const unq = (s) => s.trim().replace(/^"(.*)"$/, "$1");
+  for (const raw2 of text.split("\n")) {
+    if (!raw2.trim() || raw2.startsWith("#")) continue;
+    const indent = raw2.length - raw2.trimStart().length;
+    const line = raw2.trim();
+    if (indent === 0) {
+      if (!line.endsWith(":")) return `unexpected line ${line.slice(0, 60)}`;
+      cur = { fields: {} };
+      section = null;
+      for (const d of descriptors(line.slice(0, -1))) out2.set(d, cur);
+    } else if (!cur) return "a field before any entry";
+    else if (indent === 2) {
+      if (line.endsWith(":")) {
+        section = {};
+        cur.fields[unq(line.slice(0, -1))] = section;
+      } else {
+        section = null;
+        const sp = line.search(/\s/);
+        if (sp < 0) return `unexpected line ${line.slice(0, 60)}`;
+        cur.fields[unq(line.slice(0, sp))] = unq(line.slice(sp + 1));
+      }
+    } else if (indent === 4 && section) {
+      const m = /^("[^"]+"|\S+)\s+(.+)$/.exec(line);
+      if (!m) return `unexpected line ${line.slice(0, 60)}`;
+      section[unq(m[1])] = unq(m[2]);
+    } else return `unexpected indentation at ${line.slice(0, 60)}`;
+  }
+  return out2;
+}
+function classicGraph(text, manifests) {
+  const parsed = parseYarnClassic(text);
+  if (typeof parsed === "string") return parsed;
+  const keyOf = /* @__PURE__ */ new Map();
+  for (const [d, e] of parsed) if (!keyOf.has(e)) keyOf.set(e, d);
+  const entryOf = new Map([...keyOf].map(([e, k]) => [k, e]));
+  const entries = /* @__PURE__ */ new Map();
+  const names2 = /* @__PURE__ */ new Map();
+  for (const [e, k] of keyOf) {
+    entries.set(k, canon(e.fields));
+    names2.set(k, descName(k));
+  }
+  const workspaces = /* @__PURE__ */ new Map();
+  const byName = /* @__PURE__ */ new Map();
+  for (const [dir, m] of manifests) {
+    const k = `workspace:${dir}`;
+    workspaces.set(dir, k);
+    entries.set(k, canon(m));
+    if (typeof m.name === "string") byName.set(m.name, dir);
+  }
+  const deps = (key) => {
+    const out2 = [];
+    const ws = key.startsWith("workspace:") ? manifests.get(key.slice("workspace:".length)) : null;
+    const fields = ws ? ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] : ["dependencies", "optionalDependencies"];
+    const src = ws ?? entryOf.get(key)?.fields ?? {};
+    for (const f of fields) {
+      const d = src[f];
+      if (d === void 0) continue;
+      if (!isObj(d)) throw new Unattributable(`${key}: ${f} malformed`);
+      for (const [n, range] of Object.entries(d)) {
+        const e = parsed.get(`${n}@${String(range)}`);
+        if (e) out2.push({ key: keyOf.get(e) });
+        else if (byName.has(n)) out2.push({ link: byName.get(n) });
+        else if (f === "optionalDependencies" || f === "peerDependencies") continue;
+        else throw new Unattributable(`${key}: ${n}@${String(range)} has no entry`);
+      }
+    }
+    return out2;
+  };
+  return { workspaces, entries, names: names2, deps, shared: "" };
+}
+function yarnLockDiff(oldText, newText, manifests) {
+  const graph = (text, side) => {
+    if (text.length > MAX_LOCK_BYTES) return `over ${MAX_LOCK_BYTES} bytes`;
+    if (/^__metadata:/m.test(text)) {
+      let doc;
+      try {
+        doc = (0, import_yaml.parse)(text, { maxAliasCount: 0, uniqueKeys: true, strict: true });
+      } catch (e) {
+        return `unparseable (${e.message.split("\n")[0]})`;
+      }
+      if (!isObj(doc)) return "not a mapping";
+      return berryGraph(doc);
+    }
+    if (!/^# yarn lockfile v1$/m.test(text)) return "not a yarn lockfile we read (berry, v1)";
+    if (!manifests) return "yarn v1 lockfile without the workspace manifests";
+    return classicGraph(text, manifests[side]);
+  };
+  const a = graph(oldText, "old");
+  if (typeof a === "string") return `base lockfile ${a}`;
+  const b = graph(newText, "new");
+  if (typeof b === "string") return `head lockfile ${b}`;
+  return diffGraphs(a, b);
+}
+
+// ../engine/src/lockfile.ts
+var MAX_LOCKFILE_BYTES = 32 * 1024 * 1024;
+var dirOf4 = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+var baseOf3 = (p) => p.slice(p.lastIndexOf("/") + 1);
+function normalize4(p) {
+  const out2 = [];
+  for (const s of p.split("/")) {
+    if (s === "" || s === ".") continue;
+    if (s === "..") {
+      if (!out2.length) return null;
+      out2.pop();
+    } else out2.push(s);
+  }
+  return out2.join("/");
+}
+var isObj2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function canon2(v) {
+  if (Array.isArray(v)) return `[${v.map(canon2).join(",")}]`;
+  if (isObj2(v))
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon2(v[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
+}
 var DEP_FIELDS = ["dependencies", "devDependencies", "optionalDependencies"];
 var KNOWN_TOP = /* @__PURE__ */ new Set(["lockfileVersion", "importers", "packages", "snapshots"]);
-var Unattributable = class extends Error {
+var Unattributable2 = class extends Error {
 };
 function parseLock(text) {
   if (text.length > MAX_LOCKFILE_BYTES) return `over ${MAX_LOCKFILE_BYTES} bytes`;
   let docs;
   try {
-    const parsed = (0, import_yaml.parseAllDocuments)(text, { uniqueKeys: true, strict: true });
+    const parsed = (0, import_yaml2.parseAllDocuments)(text, { uniqueKeys: true, strict: true });
     if (!Array.isArray(parsed)) return "unparseable (empty)";
     docs = parsed.map((d) => {
       if (d.errors.length) throw d.errors[0];
@@ -8268,28 +8753,28 @@ function parseLock(text) {
   } catch (e) {
     return `unparseable (${e.message.split("\n")[0]})`;
   }
-  const main = docs.filter((d) => isObj(d) && "importers" in d);
+  const main = docs.filter((d) => isObj2(d) && "importers" in d);
   if (docs.length === 1 && main.length === 0) {
-    if (!isObj(docs[0])) return "not a mapping";
+    if (!isObj2(docs[0])) return "not a mapping";
   } else if (main.length !== 1)
     return `${main.length} lockfile documents with importers among ${docs.length}`;
   const doc = docs.length === 1 ? docs[0] : main[0];
   const others = docs.filter((d) => d !== doc);
-  if (!isObj(doc)) return "not a mapping";
+  if (!isObj2(doc)) return "not a mapping";
   const v = String(doc.lockfileVersion ?? "");
   const version = v === "9.0" ? "9" : v === "6.0" || v === "6.1" ? "6" : null;
   if (!version) return `lockfileVersion ${JSON.stringify(doc.lockfileVersion)} is not one we read (6.x, 9.0)`;
-  if (!isObj(doc.importers)) return "no importers (not a workspace lockfile)";
+  if (!isObj2(doc.importers)) return "no importers (not a workspace lockfile)";
   const importers = /* @__PURE__ */ new Map();
   for (const [k, raw2] of Object.entries(doc.importers)) {
-    const id = normalize3(k);
+    const id = normalize4(k);
     const e = raw2 === null ? {} : raw2;
-    if (id === null || !isObj(e)) return `importer ${k} is malformed`;
+    if (id === null || !isObj2(e)) return `importer ${k} is malformed`;
     importers.set(id, e);
   }
   const packages = doc.packages ?? {};
   const snapshots = doc.snapshots ?? {};
-  if (!isObj(packages) || !isObj(snapshots)) return "packages or snapshots malformed";
+  if (!isObj2(packages) || !isObj2(snapshots)) return "packages or snapshots malformed";
   return { version, top: doc, importers, packages, snapshots, others };
 }
 function withoutPeers(key) {
@@ -8307,20 +8792,20 @@ function resolveDep(p, name2, version) {
   const fallback = p.version === "9" ? p.packages : null;
   const candidates = p.version === "9" ? [`${name2}@${version}`, version] : [version.startsWith("/") ? version : `/${name2}@${version}`, version, `/${version}`];
   for (const c of candidates) if (c in table || fallback && c in fallback) return c;
-  throw new Unattributable(`${name2}@${version} has no entry`);
+  throw new Unattributable2(`${name2}@${version} has no entry`);
 }
 function fingerprint(p, key) {
-  if (p.version === "9") return canon([p.packages[withoutPeers(key)] ?? null, p.snapshots[key] ?? null]);
-  return canon(p.packages[key] ?? null);
+  if (p.version === "9") return canon2([p.packages[withoutPeers(key)] ?? null, p.snapshots[key] ?? null]);
+  return canon2(p.packages[key] ?? null);
 }
 function depsOf(p, key) {
   const e = p.version === "9" ? p.snapshots[key] : p.packages[key];
-  if (!isObj(e)) return [];
+  if (!isObj2(e)) return [];
   const out2 = [];
   for (const f of ["dependencies", "optionalDependencies"]) {
     const d = e[f];
     if (d === void 0) continue;
-    if (!isObj(d)) throw new Unattributable(`${key}: ${f} malformed`);
+    if (!isObj2(d)) throw new Unattributable2(`${key}: ${f} malformed`);
     for (const [n, v] of Object.entries(d)) out2.push([n, String(v)]);
   }
   return out2;
@@ -8333,12 +8818,12 @@ function importerClosure(p, id) {
   for (const f of DEP_FIELDS) {
     const deps = entry[f];
     if (deps === void 0) continue;
-    if (!isObj(deps)) throw new Unattributable(`importer ${id || "."}: ${f} malformed`);
+    if (!isObj2(deps)) throw new Unattributable2(`importer ${id || "."}: ${f} malformed`);
     for (const [name2, spec] of Object.entries(deps)) {
-      const version = isObj(spec) ? String(spec.version ?? "") : String(spec);
-      if (!version) throw new Unattributable(`importer ${id || "."}: ${name2} has no version`);
+      const version = isObj2(spec) ? String(spec.version ?? "") : String(spec);
+      if (!version) throw new Unattributable2(`importer ${id || "."}: ${name2} has no version`);
       if (version.startsWith("link:")) {
-        const target = normalize3(`${id}/${version.slice(5)}`);
+        const target = normalize4(`${id}/${version.slice(5)}`);
         if (target !== null && p.importers.has(target)) links.add(target);
         else own.set(`link:${target ?? version}`, "");
         continue;
@@ -8351,13 +8836,13 @@ function importerClosure(p, id) {
     if (own.has(k)) continue;
     own.set(k, fingerprint(p, k));
     for (const [n, v] of depsOf(p, k)) {
-      if (v.startsWith("link:")) throw new Unattributable(`${k} links to ${v}`);
+      if (v.startsWith("link:")) throw new Unattributable2(`${k} links to ${v}`);
       stack.push(resolveDep(p, n, v));
     }
   }
   return { own, links };
 }
-var sameMap = (a, b) => {
+var sameMap2 = (a, b) => {
   if (!a || !b || a.size !== b.size) return false;
   for (const [k, v] of a) if (b.get(k) !== v) return false;
   return true;
@@ -8383,11 +8868,11 @@ function pnpmSettings(npmrc, workspaceYaml) {
   if (workspaceYaml) {
     let doc;
     try {
-      doc = (0, import_yaml.parse)(workspaceYaml, { maxAliasCount: 0 });
+      doc = (0, import_yaml2.parse)(workspaceYaml, { maxAliasCount: 0 });
     } catch {
       return "pnpm-workspace.yaml is unparseable";
     }
-    if (isObj(doc)) {
+    if (isObj2(doc)) {
       if (doc.nodeLinker !== void 0) s.nodeLinker = String(doc.nodeLinker);
       if (doc.shamefullyHoist !== void 0) s.shamefullyHoist = doc.shamefullyHoist === true;
       if (doc.publicHoistPattern !== void 0) {
@@ -8407,10 +8892,10 @@ function pnpmLockDiff(oldText, newText, settings) {
   const b = parseLock(newText);
   if (typeof b === "string") return `head lockfile ${b}`;
   if (a.version !== b.version) return "lockfileVersion changed";
-  if (canon(a.others) !== canon(b.others)) return "another lockfile document (config dependencies) changed";
+  if (canon2(a.others) !== canon2(b.others)) return "another lockfile document (config dependencies) changed";
   for (const k of /* @__PURE__ */ new Set([...Object.keys(a.top), ...Object.keys(b.top)])) {
     if (KNOWN_TOP.has(k)) continue;
-    if (canon(a.top[k]) !== canon(b.top[k])) return `shared section ${k} changed`;
+    if (canon2(a.top[k]) !== canon2(b.top[k])) return `shared section ${k} changed`;
   }
   if (settings.nodeLinker !== "isolated")
     return `node-linker is ${settings.nodeLinker}: every package sees every dependency`;
@@ -8428,7 +8913,7 @@ function pnpmLockDiff(oldText, newText, settings) {
     for (const id of ids) {
       const x = ca.get(id);
       const y = cb.get(id);
-      if (!x || !y || canon(a.importers.get(id)) !== canon(b.importers.get(id)) || !sameMap(x.own, y.own))
+      if (!x || !y || canon2(a.importers.get(id)) !== canon2(b.importers.get(id)) || !sameMap2(x.own, y.own))
         direct.add(id);
     }
     const viaLinks = /* @__PURE__ */ new Set();
@@ -8490,24 +8975,42 @@ function pnpmLockDiff(oldText, newText, settings) {
       return `${hoisted.slice(0, 3).join(", ")} ${hoisted.length > 1 ? "are" : "is"} hoisted to the root node_modules (public-hoist-pattern), where every package can import ${hoisted.length > 1 ? "them" : "it"}`;
     return { direct, viaLinks, changedNames: [...changedNames].sort(), importers: [...ids] };
   } catch (e) {
-    if (e instanceof Unattributable) return `can't attribute: ${e.message}`;
+    if (e instanceof Unattributable2) return `can't attribute: ${e.message}`;
     throw e;
   }
 }
-var NODE_ROOT_LOCKS = /* @__PURE__ */ new Set([
-  "package-lock.json",
-  "npm-shrinkwrap.json",
-  "yarn.lock",
-  "bun.lock",
-  "bun.lockb"
-]);
+var NODE_ROOT_LOCKS = /* @__PURE__ */ new Set(["bun.lock", "bun.lockb"]);
+var NPM_LOCKS = /* @__PURE__ */ new Set(["package-lock.json", "npm-shrinkwrap.json"]);
 var PY_ROOT_LOCKS = /* @__PURE__ */ new Set(["uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock"]);
+function scopeOf(d) {
+  if (d.direct.has("")) return { kind: "all", reason: "lockfile: the root workspace's dependencies changed" };
+  const dirs = [...d.direct, ...d.viaLinks].filter((x) => x !== "").sort();
+  const importerDirs = d.importers.filter((x) => x !== "").sort();
+  return {
+    kind: "dirs",
+    dirs,
+    rootOwned: d.viaLinks.has(""),
+    importerDirs,
+    note: dirs.length ? `lockfile: dependencies changed for ${dirs.join(", ")}${d.changedNames.length ? ` (${d.changedNames.slice(0, 5).join(", ")}${d.changedNames.length > 5 ? ", ..." : ""})` : ""}` : "lockfile: no workspace\u2019s dependencies changed"
+  };
+}
 function lockfileScope(l) {
-  const dir = dirOf3(l.path);
-  const name2 = baseOf2(l.path);
+  const dir = dirOf4(l.path);
+  const name2 = baseOf3(l.path);
   if (dir) return { kind: "all", reason: `lockfile in ${dir}/: who installs and uses it is unknown` };
   if (NODE_ROOT_LOCKS.has(name2))
     return { kind: "all", reason: "lockfile: a hoisted node_modules lets any package import any dependency" };
+  if (NPM_LOCKS.has(name2) || name2 === "yarn.lock") {
+    if (l.oldText === null || l.newText === null) return { kind: "all", reason: "lockfile added or deleted" };
+    let d2;
+    try {
+      d2 = NPM_LOCKS.has(name2) ? npmLockDiff(l.oldText, l.newText) : yarnLockDiff(l.oldText, l.newText, l.yarnManifests?.());
+    } catch (e) {
+      d2 = `unreadable (${e.message.split("\n")[0]})`;
+    }
+    if (typeof d2 === "string") return { kind: "all", reason: `lockfile: ${d2}` };
+    return scopeOf(d2);
+  }
   if (PY_ROOT_LOCKS.has(name2))
     return { kind: "all", reason: "lockfile: one environment lets any module import any dependency" };
   if (name2 !== "pnpm-lock.yaml") return { kind: "all", reason: "lockfile" };
@@ -13778,7 +14281,7 @@ if (!nativeBinding) {
   }
   throw new Error(`Failed to load native binding`);
 }
-var { Severity, ParseResult, ExportExportNameKind, ExportImportNameKind, ExportLocalNameKind, ImportNameKind, parse: parse2, parseSync, rawTransferSupported } = nativeBinding;
+var { Severity, ParseResult, ExportExportNameKind, ExportImportNameKind, ExportLocalNameKind, ImportNameKind, parse: parse3, parseSync, rawTransferSupported } = nativeBinding;
 var { getBufferOffset, parseRaw, parseRawSync } = nativeBinding;
 
 // ../../node_modules/.pnpm/oxc-parser@0.157.0/node_modules/oxc-parser/src-js/wrap.js
@@ -15438,7 +15941,28 @@ function analyzeChanges(diffs, read, opts = {}) {
         path: d.path,
         oldText: d.status === "added" ? null : read("old", d.path),
         newText: d.status === "deleted" ? null : read("new", d.path),
-        readHead: (p) => opts.tree?.read(p) ?? null
+        readHead: (p) => opts.tree?.read(p) ?? null,
+        yarnManifests: () => {
+          const side = (s) => {
+            const m = /* @__PURE__ */ new Map();
+            const dirs = ["", ...workspaces().map((w) => w.root)];
+            opts.prefetchAny?.(
+              s,
+              dirs.map((dir) => dir ? `${dir}/package.json` : "package.json")
+            );
+            for (const dir of dirs) {
+              const text = (opts.readAny ?? read)(s, dir ? `${dir}/package.json` : "package.json");
+              if (text === null) continue;
+              try {
+                const j = JSON.parse(text);
+                if (isObj(j)) m.set(dir, j);
+              } catch {
+              }
+            }
+            return m;
+          };
+          return { old: side("old"), new: side("new") };
+        }
       });
       if (scope.kind === "all") fc.runAll = scope.reason;
       else {
@@ -15459,11 +15983,27 @@ function analyzeChanges(diffs, read, opts = {}) {
       const root = kind !== "lockfile" && opts.nonCodeInPackage === "package" ? packageOf2(d.path) : null;
       const dir = d.path.slice(0, Math.max(0, d.path.lastIndexOf("/")));
       const scoped = kind === "manifest" && d.path.endsWith("/package.json") ? packageAndDependents(workspaces(), dir) : [];
+      const fb = !root && !scoped.length && kind !== "lockfile" ? opts.fallback?.(d.path, kind) : null;
       if (root) fc.packageScope = [root];
       else if (scoped.length) {
         fc.packageScope = scoped;
         fc.note = "workspace manifest: package and its dependents";
-      } else fc.runAll = kind === "unknown" ? "unknown file type" : kind;
+      } else if (fb?.kind === "scope" || fb?.kind === "readers") {
+        fc.fileLevel = "read";
+        fc.note = fb.note;
+        if (fb.kind === "scope") {
+          fc.packageScope = fb.roots;
+          if (fb.rootPackage)
+            cs.packageScopes.push({
+              path: d.path,
+              root: "",
+              reason: kind,
+              except: fb.packageRoots
+            });
+        }
+      } else if (fb?.kind === "all")
+        fc.runAll = `${kind === "unknown" ? "unknown file type" : kind}: ${fb.reason}`;
+      else fc.runAll = kind === "unknown" ? "unknown file type" : kind;
     } else if (d.status === "deleted") {
       fc.fileLevel = "deleted";
     } else if (d.binary) {
@@ -15576,16 +16116,27 @@ function changesFromGit(repo, base3, head, opts = {}) {
   const specs = [];
   for (const d of diffs) {
     const kind = classify(d.path, { knownTests: opts.knownTests });
-    const wanted = kind === "source" && parserFor(d.path) || kind === "ci" && WORKFLOW.test(d.path) || kind === "lockfile" && d.path === "pnpm-lock.yaml" && opts.lockfiles === "importers";
+    const wanted = kind === "source" && parserFor(d.path) || kind === "ci" && WORKFLOW.test(d.path) || kind === "lockfile" && /^(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock)$/.test(d.path) && opts.lockfiles === "importers";
     if (d.binary || !wanted) continue;
     if (d.oldPath && d.status !== "added") specs.push(`${base3}:${d.oldPath}`);
     if (d.newPath && d.status !== "deleted") specs.push(`${head}:${d.newPath}`);
   }
   const blobs = readBlobs(repo, specs);
   const workspaces = opts.workspaces ?? (() => mergeWorkspaces(readWorkspaces(repo, base3), readWorkspaces(repo, head)));
+  const readAny = (side, p) => {
+    const spec = `${side === "old" ? base3 : head}:${p}`;
+    if (!blobs.has(spec)) for (const [k, v] of readBlobs(repo, [spec])) blobs.set(k, v);
+    return blobs.get(spec) ?? null;
+  };
+  const prefetchAny = (side, paths) => {
+    const specs2 = paths.map((p) => `${side === "old" ? base3 : head}:${p}`).filter((x) => !blobs.has(x));
+    for (const [k, v] of readBlobs(repo, specs2)) blobs.set(k, v);
+  };
   return analyzeChanges(diffs, (side, p) => blobs.get(`${side === "old" ? base3 : head}:${p}`) ?? null, {
     ...opts,
     workspaces,
+    readAny,
+    prefetchAny,
     tree: opts.tree ?? gitTree(repo, head)
   });
 }
@@ -15714,9 +16265,9 @@ var NAMED_SCRIPT = /^(Dockerfile|Containerfile|Makefile|GNUmakefile|makefile|jus
 var MAX_CORPUS_FILES = 3e4;
 var MAX_CORPUS_BYTES = 256 * 1024 * 1024;
 var MAX_TEXT = 2 * 1024 * 1024;
-var baseOf3 = (p) => p.slice(p.lastIndexOf("/") + 1);
-var dirOf4 = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
-function normalize4(p) {
+var baseOf4 = (p) => p.slice(p.lastIndexOf("/") + 1);
+var dirOf5 = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+function normalize5(p) {
   const out2 = [];
   for (const s of p.split("/")) {
     if (s === "" || s === ".") continue;
@@ -15738,7 +16289,7 @@ function jobSetup(tree, workflow) {
     const [, text] = queue.shift();
     texts.push(text);
     for (const m of text.matchAll(LOCAL_USES)) {
-      const target = normalize4(m[1].replace(/@.*$/, ""));
+      const target = normalize5(m[1].replace(/@.*$/, ""));
       if (target === null) continue;
       if (WORKFLOW2.test(target)) {
         if (workflows.has(target)) continue;
@@ -15782,7 +16333,7 @@ function corpus(ctx) {
   for (const rec of ctx.map.tests.values()) for (const l of rec.loaded) loaded.add(l);
   const paths = ctx.tree.paths().filter(
     (p) => !p.includes("node_modules/") && // Extensionless files are scripts as often as not (`scripts/setup-db`).
-    (TEXT_FILE.test(p) || NAMED_SCRIPT.test(baseOf3(p)) || !baseOf3(p).includes(".")) && !ctx.isTest(p) && !((isJs(p) || isPy(p)) && loaded.has(p)) && !["ignored", "lockfile", "snapshot", "test"].includes(classify(p))
+    (TEXT_FILE.test(p) || NAMED_SCRIPT.test(baseOf4(p)) || !baseOf4(p).includes(".")) && !ctx.isTest(p) && !((isJs(p) || isPy(p)) && loaded.has(p)) && !["ignored", "lockfile", "snapshot", "test"].includes(classify(p))
   );
   if (paths.length > MAX_CORPUS_FILES) return `${paths.length} files could name it (max ${MAX_CORPUS_FILES})`;
   ctx.tree.prefetch?.(paths);
@@ -15794,7 +16345,7 @@ function corpus(ctx) {
     bytes += text.length;
     if (bytes > MAX_CORPUS_BYTES) return `over ${MAX_CORPUS_BYTES} bytes of files could name it`;
     if (text.length > MAX_TEXT) {
-      if (isJs(p) || isPy(p) || NAMED_SCRIPT.test(baseOf3(p)) || !baseOf3(p).includes("."))
+      if (isJs(p) || isPy(p) || NAMED_SCRIPT.test(baseOf4(p)) || !baseOf4(p).includes("."))
         return `${p} is too large to scan`;
       continue;
     }
@@ -15804,13 +16355,13 @@ function corpus(ctx) {
 }
 var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function namesPath(text, from, path, workspaceRoots = []) {
-  if (text.includes(baseOf3(path))) return true;
-  const fromDir = dirOf4(from);
+  if (text.includes(baseOf4(path))) return true;
+  const fromDir = dirOf5(from);
   const segs = path.split("/");
   for (let i2 = segs.length - 1; i2 >= 1; i2--) {
     const dir = segs.slice(0, i2).join("/");
     if (workspaceRoots.some((r) => r === dir || r.startsWith(`${dir}/`))) break;
-    const forms = [dir, baseOf3(dir)];
+    const forms = [dir, baseOf4(dir)];
     if (fromDir && dir.startsWith(`${fromDir}/`)) forms.push(dir.slice(fromDir.length + 1));
     for (const f of forms) {
       const rx = f.includes("/") ? new RegExp(`(^|[^\\w.-])(\\./)?${esc(f)}(?![\\w.-])`) : new RegExp(`(['"\`]|\\./|^|\\s)${esc(f)}(/|['"\`])`, "m");
@@ -15820,8 +16371,8 @@ function namesPath(text, from, path, workspaceRoots = []) {
   return false;
 }
 function configInput(path, workspaceRoots) {
-  const name2 = baseOf3(path);
-  const dir = dirOf4(path);
+  const name2 = baseOf4(path);
+  const dir = dirOf5(path);
   if (path.split("/").some((s) => s.startsWith("."))) return "a dotfile or in a dot directory";
   if (!dir) return "at the repo root";
   if (workspaceRoots.includes(dir)) return `at the root of the workspace package ${dir}`;
@@ -15859,7 +16410,7 @@ function nonCodeNarrowing(ctx) {
   const narrowData = (path) => {
     if (!DATA_FILE.test(path) || path.startsWith(".github/")) return null;
     if (configInput(path, ctx.workspaceRoots)) return null;
-    const dir = dirOf4(path);
+    const dir = dirOf5(path);
     const actionDir = ctx.tree.read(`${dir}/action.yml`) !== null || ctx.tree.read(`${dir}/action.yaml`) !== null;
     if (actionDir && !ctx.setup) return null;
     if (ctx.tree.read(".gitmodules") !== null) return null;
@@ -16269,8 +16820,501 @@ function select({ changes, map, allTests, always }) {
   return { runAll: false, tests, skipped };
 }
 
+// ../engine/src/graph/nx.ts
+var WORKSPACE_ROOT = /^\{workspaceRoot\}\/(.+)$/;
+function rootGlobs(inputs) {
+  if (!Array.isArray(inputs)) return [];
+  const out2 = [];
+  for (const i2 of inputs) {
+    const s = typeof i2 === "string" ? i2 : isObj(i2) && typeof i2.fileset === "string" ? i2.fileset : null;
+    const m = s ? WORKSPACE_ROOT.exec(s) : null;
+    if (m) out2.push(m[1]);
+  }
+  return out2;
+}
+function configGlobs(cfg, targetsKey) {
+  const out2 = [];
+  if (isObj(cfg.namedInputs)) for (const v of Object.values(cfg.namedInputs)) out2.push(...rootGlobs(v));
+  const targets = cfg[targetsKey];
+  if (isObj(targets)) {
+    for (const t of Object.values(targets)) if (isObj(t)) out2.push(...rootGlobs(t.inputs));
+  }
+  return out2;
+}
+function nxConfig(tree, files) {
+  const cfg = { used: false, projects: [], inputs: [] };
+  const nxText = tree.read("nx.json");
+  if (nxText !== null) {
+    cfg.used = true;
+    let nx;
+    try {
+      nx = parseJsonc(nxText);
+    } catch (e) {
+      return `nx.json is unparseable (${e.message})`;
+    }
+    if (!isObj(nx)) return "nx.json is not an object";
+    for (const g of configGlobs(nx, "targetDefaults"))
+      cfg.inputs.push({ glob: g, roots: null, from: "nx.json" });
+    if (isObj(nx.implicitDependencies))
+      for (const [file, v] of Object.entries(nx.implicitDependencies)) {
+        const names2 = Array.isArray(v) ? v.filter((x) => typeof x === "string") : null;
+        cfg.inputs.push({
+          glob: file,
+          roots: null,
+          from: "nx.json implicitDependencies",
+          ...names2 && { names: names2 }
+        });
+      }
+  }
+  const projectFiles = files.filter((f) => f === "project.json" || f.endsWith("/project.json"));
+  tree.prefetch?.(projectFiles);
+  for (const f of projectFiles) {
+    const text = tree.read(f);
+    if (text === null) continue;
+    cfg.used = true;
+    let p;
+    try {
+      p = parseJsonc(text);
+    } catch (e) {
+      return `${f} is unparseable (${e.message})`;
+    }
+    if (!isObj(p)) return `${f} is not an object`;
+    const root = dirOf3(f);
+    if (root === "") return "project.json at the repo root (one project holds every file)";
+    const implicit = Array.isArray(p.implicitDependencies) ? p.implicitDependencies.filter((x) => typeof x === "string" && !x.startsWith("!")) : [];
+    cfg.projects.push({ root, name: typeof p.name === "string" ? p.name : null, implicit });
+    for (const g of configGlobs(p, "targets")) cfg.inputs.push({ glob: g, roots: [root], from: f });
+  }
+  return cfg;
+}
+
+// ../engine/src/graph/turbo.ts
+var TURBO_ROOT = /^\$TURBO_ROOT\$\/(.+)$/;
+function taskRootInputs(cfg) {
+  const out2 = [];
+  for (const key of ["tasks", "pipeline"]) {
+    const tasks = cfg[key];
+    if (!isObj(tasks)) continue;
+    for (const t of Object.values(tasks)) {
+      if (!isObj(t) || !Array.isArray(t.inputs)) continue;
+      for (const i2 of t.inputs) {
+        const m = typeof i2 === "string" ? TURBO_ROOT.exec(i2) : null;
+        if (m) out2.push(m[1]);
+      }
+    }
+  }
+  return out2;
+}
+function turboConfig(tree, files, roots) {
+  const out2 = [];
+  const configs = files.filter(
+    (f) => f === "turbo.json" || f.endsWith("/turbo.json") && roots.includes(dirOf3(f))
+  );
+  tree.prefetch?.(configs);
+  for (const f of configs) {
+    const text = tree.read(f);
+    if (text === null) continue;
+    let cfg;
+    try {
+      cfg = parseJsonc(text);
+    } catch (e) {
+      return `${f} is unparseable (${e.message})`;
+    }
+    if (!isObj(cfg)) return `${f} is not an object`;
+    const scope = f === "turbo.json" ? null : [dirOf3(f)];
+    if (f === "turbo.json" && cfg.globalDependencies !== void 0) {
+      if (!Array.isArray(cfg.globalDependencies)) return "turbo.json globalDependencies is not a list";
+      for (const g of cfg.globalDependencies)
+        if (typeof g === "string" && !g.startsWith("!"))
+          out2.push({ glob: g, roots: null, from: "turbo.json" });
+    }
+    for (const g of taskRootInputs(cfg)) out2.push({ glob: g, roots: scope, from: f });
+  }
+  return out2;
+}
+
+// ../engine/src/graph/index.ts
+var DEP_FIELDS2 = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+function readJson(tree, path) {
+  const text = tree.read(path);
+  if (text === null) return null;
+  if (text.length > MAX_CONFIG_BYTES) return { error: `${path} is over ${MAX_CONFIG_BYTES} bytes` };
+  try {
+    return { value: JSON.parse(text) };
+  } catch (e) {
+    return { error: `${path} is unparseable (${e.message.split("\n")[0]})` };
+  }
+}
+function readPackageGraph(tree) {
+  const files = tree.paths().filter((p) => !p.includes("node_modules/"));
+  const graph = { packages: [], tools: [], inputs: [], rootDeps: /* @__PURE__ */ new Set() };
+  const fail = (why) => ({ ...graph, unreadable: why });
+  const byRoot = /* @__PURE__ */ new Map();
+  const pkg = (root) => {
+    let p = byRoot.get(root);
+    if (!p) byRoot.set(root, p = { root, names: [], deps: /* @__PURE__ */ new Set() });
+    return p;
+  };
+  const globs = [];
+  const rootPkg = readJson(tree, "package.json");
+  if (rootPkg && "error" in rootPkg) return fail(rootPkg.error);
+  if (rootPkg && isObj(rootPkg.value)) {
+    const w = rootPkg.value.workspaces;
+    const list3 = Array.isArray(w) ? w : isObj(w) && Array.isArray(w.packages) ? w.packages : [];
+    if (list3.length) graph.tools.push("workspaces");
+    for (const g of list3) if (typeof g === "string") globs.push(g);
+    for (const f of DEP_FIELDS2) {
+      const deps = rootPkg.value[f];
+      if (isObj(deps)) for (const n of Object.keys(deps)) graph.rootDeps.add(n);
+    }
+  }
+  const pnpm = tree.read("pnpm-workspace.yaml");
+  if (pnpm !== null) {
+    globs.push(...pnpmWorkspaceGlobs(pnpm));
+    graph.tools.push("pnpm");
+  }
+  const dirs = workspaceDirs(globs, files).filter((d) => d !== "");
+  tree.prefetch?.(dirs.map((d) => `${d}/package.json`));
+  for (const d of dirs) {
+    const j = readJson(tree, `${d}/package.json`);
+    if (!j) continue;
+    if ("error" in j) return fail(j.error);
+    if (!isObj(j.value)) return fail(`${d}/package.json is not an object`);
+    const p = pkg(d);
+    if (typeof j.value.name === "string") p.names.push(j.value.name);
+    for (const f of DEP_FIELDS2) {
+      const deps = j.value[f];
+      if (isObj(deps)) for (const n of Object.keys(deps)) p.deps.add(n);
+    }
+  }
+  if (tree.read("nx.json") !== null) {
+    const nx = nxConfig(tree, files);
+    if (typeof nx === "string") return fail(nx);
+    if (nx.used) graph.tools.push("nx");
+    for (const pr of nx.projects) {
+      const p = pkg(pr.root);
+      if (pr.name && !p.names.includes(pr.name)) p.names.push(pr.name);
+      for (const d of pr.implicit) p.deps.add(d);
+      if (!p.names.length) p.names.push(baseOf2(pr.root));
+    }
+    graph.inputs.push(...nx.inputs);
+  }
+  if (tree.read("turbo.json") !== null) {
+    const turbo = turboConfig(tree, files, [...byRoot.keys()]);
+    if (typeof turbo === "string") return fail(turbo);
+    graph.tools.push("turbo");
+    graph.inputs.push(...turbo);
+  }
+  try {
+    for (const i2 of graph.inputs) compileGlob(i2.glob);
+    const allNames = [...byRoot.values()].flatMap((p) => p.names);
+    for (const p of byRoot.values())
+      for (const d of [...p.deps])
+        if (/[*?{[]/.test(d)) {
+          p.deps.delete(d);
+          for (const n of allNames) if (globMatch(d, n)) p.deps.add(n);
+        }
+  } catch (e) {
+    return fail(`a declared glob can't be read (${e.message})`);
+  }
+  graph.packages = [...byRoot.values()].sort((a, b) => a.root.localeCompare(b.root));
+  return graph;
+}
+function mergeGraphs(a, b) {
+  const by = /* @__PURE__ */ new Map();
+  for (const p of [...a.packages, ...b.packages]) {
+    const prev = by.get(p.root);
+    if (!prev) by.set(p.root, { root: p.root, names: [...p.names], deps: new Set(p.deps) });
+    else {
+      for (const n of p.names) if (!prev.names.includes(n)) prev.names.push(n);
+      for (const d of p.deps) prev.deps.add(d);
+    }
+  }
+  const unreadable = a.unreadable ?? b.unreadable;
+  return {
+    packages: [...by.values()].sort((x, y) => x.root.localeCompare(y.root)),
+    tools: [.../* @__PURE__ */ new Set([...a.tools, ...b.tools])],
+    inputs: [...a.inputs, ...b.inputs],
+    rootDeps: /* @__PURE__ */ new Set([...a.rootDeps, ...b.rootDeps]),
+    ...unreadable && { unreadable }
+  };
+}
+function owningPackage(graph, path) {
+  let best = null;
+  for (const p of graph.packages)
+    if (path.startsWith(`${p.root}/`) && (!best || p.root.length > best.root.length)) best = p;
+  return best;
+}
+function enclosingPackages(graph, path) {
+  return graph.packages.filter((p) => path.startsWith(`${p.root}/`));
+}
+function rootDependsOn(graph, roots) {
+  return graph.packages.some((p) => roots.includes(p.root) && p.names.some((n) => graph.rootDeps.has(n)));
+}
+function withDependents(graph, roots) {
+  const out2 = /* @__PURE__ */ new Set();
+  const names2 = /* @__PURE__ */ new Set();
+  const add2 = (p) => {
+    out2.add(p.root);
+    for (const n of p.names) names2.add(n);
+  };
+  for (const r of roots) {
+    const p = graph.packages.find((x) => x.root === r);
+    if (p) add2(p);
+  }
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const p of graph.packages) {
+      if (out2.has(p.root) || ![...p.deps].some((d) => names2.has(d))) continue;
+      add2(p);
+      grew = true;
+    }
+  }
+  return [...out2].sort();
+}
+function declaredInputs(graph, path) {
+  return graph.inputs.filter((i2) => globMatch(i2.glob, path));
+}
+
+// ../engine/src/graph/fallback.ts
+var ENV_FILE2 = /^\.env(\.|$)/;
+var INSTALL_CONFIG = /* @__PURE__ */ new Set([
+  ".npmrc",
+  ".yarnrc",
+  ".yarnrc.yml",
+  "bunfig.toml",
+  "pnpm-workspace.yaml",
+  ".pnpmfile.cjs",
+  ".pnpmfile.mjs"
+]);
+var RUNTIME_VERSION = /* @__PURE__ */ new Set([".nvmrc", ".node-version", ".tool-versions", ".python-version"]);
+var GRAPH_CONFIG = /* @__PURE__ */ new Set(["turbo.json", "nx.json", "lerna.json", "rush.json"]);
+var DOCKERISH = /^(Dockerfile|Containerfile)(\..*)?$|\.dockerfile$|^\.dockerignore$/i;
+var BUILDS_IMAGES = /\b(docker|podman|buildx|buildah|kaniko)\b|build-push-action/i;
+var BUILD_FILE = /^(Dockerfile|Containerfile|Makefile|GNUmakefile|makefile|justfile|Justfile|Taskfile|Procfile|Jenkinsfile|CMakeLists|BUILD|WORKSPACE|MODULE)(\..*)?$|\.(dockerfile|mk|cmake|bzl|bazel|nix)$|^(docker-)?compose([.-][\w.-]*)?\.ya?ml$/;
+var DATA_TEXT = /\.(jsonl|ndjson|csv|tsv|txt|xml|html?|svg|po|pot|snap|lock)$/i;
+var JSON_CONFIG = /^(package|project|turbo|nx|lerna|rush|tsconfig[\w.-]*|jsconfig[\w.-]*|[\w.-]*\.config|[\w.-]*rc|renovate|vercel|firebase|app|angular|components|deno|biome)\.json5?c?$|^\.[\w.-]+rc(\.json)?$/;
+var LINT_CONFIG = /^\.?(eslint|oxlint|oxfmt|prettier|stylelint|biome|dprint|commitlint|lintstaged|lint-staged|markdownlint|cspell|typos|knip|syncpack|coderabbit|codecov|renovate|sonar-project|release-please)[\w.-]*$|^\.editorconfig$|^\.[\w-]*ignore$|^\.gitattributes$|^CODEOWNERS$/i;
+var MAX_NAMER_FILES = 1e5;
+var PY_PROJECT = /^(pyproject\.toml|setup\.py|setup\.cfg|Pipfile|conftest\.py|pytest\.ini|tox\.ini|noxfile\.py|requirements([-_.][\w-]+)?\.(txt|in))$/;
+function namerFile(p) {
+  const n = baseOf2(p);
+  if (LINT_CONFIG.test(n) || DATA_TEXT.test(n)) return false;
+  if (/\.json5?c?$/i.test(n)) return JSON_CONFIG.test(n) || CONFIG_NAME.some((r) => r.test(n));
+  return TEXT_FILE.test(p) || NAMED_SCRIPT.test(n) || !n.includes(".");
+}
+var esc2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var START = `(?<![\\w.\\-])`;
+var fileRx = (t) => new RegExp(`${START}${esc2(t)}(?![\\w.\\-/])`);
+var dirRx = (t) => new RegExp(`${START}${esc2(t)}(?:/?(?![\\w.\\-/])|/(?=[*{]))`);
+function innerDirs(path, root) {
+  const out2 = [];
+  for (let d = dirOf3(path); d && d !== root && (root === "" || d.startsWith(`${root}/`)); d = dirOf3(d))
+    out2.push(d);
+  return out2;
+}
+function packageFallback(ctx) {
+  const { tree, graph } = ctx;
+  const usable2 = graph.packages.length > 0 && !graph.unreadable;
+  const tools = new Set(graph.tools);
+  const buildCache = tools.has("turbo") || tools.has("nx");
+  let globals;
+  const globalTexts = () => {
+    if (globals) return globals;
+    const paths = tree.paths().filter(
+      (p) => (!p.includes("/") || !ctx.setup && p.startsWith(".github/")) && // The build cache's own declarations are read as declarations (`declared`), not as namers.
+      !GRAPH_CONFIG.has(p) && namerFile(p) && !["ignored", "lockfile", "snapshot"].includes(classify(p))
+    );
+    tree.prefetch?.(paths);
+    globals = [];
+    for (const p of paths) {
+      const text = tree.read(p);
+      if (text !== null) globals.push({ path: p, text });
+    }
+    if (ctx.setup) ctx.setup.texts.forEach((text, i2) => globals.push({ path: `job setup ${i2}`, text }));
+    return globals;
+  };
+  let corpus2;
+  const corpusTexts = () => {
+    if (corpus2) return corpus2;
+    const paths = tree.paths().filter(
+      (p) => p.includes("/") && !p.startsWith(".github/") && !p.includes("node_modules/") && namerFile(p) && !["ignored", "lockfile", "snapshot"].includes(classify(p))
+    );
+    if (paths.length > MAX_NAMER_FILES)
+      return corpus2 = `${paths.length} files could name it (max ${MAX_NAMER_FILES})`;
+    tree.prefetch?.(paths);
+    const out2 = [];
+    let bytes = 0;
+    for (const p of paths) {
+      const text = tree.read(p);
+      if (text === null) continue;
+      bytes += text.length;
+      if (bytes > MAX_CORPUS_BYTES) return corpus2 = `over ${MAX_CORPUS_BYTES} bytes of files could name it`;
+      if (text.length <= MAX_TEXT) out2.push({ path: p, text });
+    }
+    return corpus2 = out2;
+  };
+  const anchored = /* @__PURE__ */ new Map();
+  const withAnchor = (texts, anchor) => {
+    let hit = anchored.get(anchor);
+    if (!hit) anchored.set(anchor, hit = texts.filter((t) => t.text.includes(anchor)));
+    return hit;
+  };
+  const globalNamer = (path, root) => {
+    const file = [fileRx(path)];
+    const dirs = innerDirs(path, root).filter((d) => root !== "" || d.includes("/")).map(dirRx);
+    const rel = root ? path.slice(root.length + 1) : null;
+    const relRx = rel ? fileRx(rel.includes("/") ? rel : `./${rel}`) : null;
+    const baseRx = fileRx(baseOf2(path));
+    const inRootRx = root ? new RegExp(`${START}${esc2(root)}(?![\\w.\\-])`) : null;
+    for (const t of globalTexts()) {
+      if (t.path === path) continue;
+      if (file.some((r) => r.test(t.text)) || dirs.some((r) => r.test(t.text))) return t.path;
+      if (inRootRx && t.text.includes(root) && inRootRx.test(t.text)) {
+        const image = DOCKERISH.test(baseOf2(path)) && (BUILDS_IMAGES.test(t.text) || BUILD_FILE.test(baseOf2(t.path)));
+        if (image || relRx.test(t.text) || baseRx.test(t.text)) return t.path;
+      }
+    }
+    return null;
+  };
+  const scanned = /* @__PURE__ */ new Map();
+  const scan = (texts, rx, anchor) => {
+    const key = `${anchor}\0${rx.source}`;
+    let hit = scanned.get(key);
+    if (!hit)
+      scanned.set(
+        key,
+        hit = withAnchor(texts, anchor).filter((t) => rx.test(t.text)).map((t) => t.path)
+      );
+    return hit;
+  };
+  const namersOf = (path, root, names2, kind) => {
+    const texts = corpusTexts();
+    if (typeof texts === "string") return texts;
+    const rel = root ? path.slice(root.length + 1) : path;
+    const relDirs = innerDirs(path, root).map((d) => root ? d.slice(root.length + 1) : d);
+    const prefixes = root ? [baseOf2(root), ...names2] : [""];
+    const tests = [];
+    for (const pre of prefixes) {
+      const join6 = (x) => pre ? `${pre}/${x}` : x;
+      tests.push({ rx: fileRx(join6(rel)), anchor: baseOf2(rel) });
+      for (const d of relDirs) {
+        if (root || d.includes("/")) tests.push({ rx: dirRx(join6(d)), anchor: baseOf2(d) });
+        else tests.push({ rx: new RegExp(`(['"\`]|\\./|\\.\\./|^|\\s)${esc2(d)}(/|['"\`])`, "m"), anchor: d });
+      }
+    }
+    if (root && (kind !== "unknown" || DOCKERISH.test(baseOf2(path)))) {
+      tests.push({ rx: dirRx(root), anchor: root });
+      tests.push({ rx: new RegExp(`/${esc2(baseOf2(root))}/?(?![\\w.\\-/])`), anchor: `/${baseOf2(root)}` });
+    }
+    const packages = /* @__PURE__ */ new Set();
+    let rootPackage = false;
+    for (const { rx, anchor } of tests)
+      for (const p of scan(texts, rx, anchor)) {
+        if (p === path || root && p.startsWith(`${root}/`)) continue;
+        const n = baseOf2(p);
+        if (BUILD_FILE.test(n) || NAMED_SCRIPT.test(n)) return { packages, rootPackage, all: p };
+        const owner = owningPackage(graph, p);
+        if (owner) packages.add(owner.root);
+        else if (classify(p) === "test") rootPackage = true;
+        else return { packages, rootPackage, all: p };
+      }
+    return { packages, rootPackage, all: null };
+  };
+  const scoped = (path, kind, owners, what) => {
+    const owner = owners.reduce(
+      (a, p) => !a || p.root.length > a.root.length ? p : a,
+      null
+    );
+    const root = owner?.root ?? "";
+    const g = globalNamer(path, root);
+    if (g)
+      return { kind: "all", reason: `${what}; ${g} names it, and may build or run it for every package` };
+    const n = namersOf(path, root, owner?.names ?? [], kind);
+    if (typeof n === "string") return { kind: "all", reason: `${what}; can't check who names it: ${n}` };
+    if (n.all)
+      return { kind: "all", reason: `${what}; ${n.all} names it, and may build or run it for every package` };
+    const start2 = /* @__PURE__ */ new Set([...n.packages, ...owners.map((p) => p.root)]);
+    const scope = withDependents(graph, start2);
+    const rootPackage = root === "" || n.rootPackage || rootDependsOn(graph, scope);
+    const others = [...n.packages].filter((r) => !owners.some((p) => p.root === r));
+    return {
+      kind: "scope",
+      roots: scope,
+      rootPackage,
+      packageRoots: graph.packages.map((p) => p.root),
+      note: `${what}: ${root ? `${owners.map((p) => p.root).join(", ")} and dependents` : "the tests outside every package"}${others.length ? `, and ${others.join(", ")}, which name it` : ""}${root && rootPackage ? ", and the tests outside every package" : ""}, plus the tests that read it`
+    };
+  };
+  const declared2 = (path) => {
+    const hits = declaredInputs(graph, path);
+    if (!hits.length) return null;
+    const every = hits.find((h) => h.roots === null && !h.names);
+    if (every)
+      return { kind: "all", reason: `an input of every package's tasks (${every.from}: ${every.glob})` };
+    const start2 = /* @__PURE__ */ new Set();
+    for (const h of hits) {
+      for (const r of h.roots ?? []) start2.add(r);
+      for (const n of h.names ?? []) {
+        const p = graph.packages.find((x) => x.names.includes(n));
+        if (!p) return { kind: "all", reason: `${h.from} names ${n}, which is no project we know` };
+        start2.add(p.root);
+      }
+    }
+    const scope = withDependents(graph, start2);
+    return {
+      kind: "scope",
+      roots: scope,
+      rootPackage: rootDependsOn(graph, scope),
+      packageRoots: graph.packages.map((p) => p.root),
+      note: `declared as an input of ${[...start2].sort().join(", ")} (${hits.map((h) => h.from).join(", ")}): those and their dependents, plus the tests that read it`
+    };
+  };
+  return (path, kind) => {
+    if (!usable2 || kind !== "unknown" && kind !== "toolchain" && kind !== "manifest") return null;
+    const name2 = baseOf2(path);
+    if (ENV_FILE2.test(name2) || INSTALL_CONFIG.has(name2) || RUNTIME_VERSION.has(name2)) return null;
+    if (!ctx.setup)
+      for (let d = dirOf3(path); ; d = dirOf3(d)) {
+        const pre = d ? `${d}/` : "";
+        if (tree.read(`${pre}action.yml`) !== null || tree.read(`${pre}action.yaml`) !== null) return null;
+        if (!d) break;
+      }
+    const owners = enclosingPackages(graph, path);
+    if (owners.length) {
+      if (owners.some((p) => path === `${p.root}/package.json`)) return null;
+      return scoped(path, kind, owners, `in the package ${owners.map((p) => p.root).join(" and ")}`);
+    }
+    if (kind !== "unknown" && !(PY_PROJECT.test(name2) && path.includes("/")) || GRAPH_CONFIG.has(name2))
+      return null;
+    if (path.split("/").some((s) => s.startsWith("."))) return null;
+    if (path.includes("/")) {
+      const s = scoped(path, kind, [], `in ${dirOf3(path)}/, outside every workspace package`);
+      const decl2 = declared2(path);
+      if (s.kind !== "scope" || !decl2) return s;
+      if (decl2.kind !== "scope") return decl2;
+      return {
+        ...s,
+        roots: [.../* @__PURE__ */ new Set([...s.roots, ...decl2.roots])].sort(),
+        note: `${s.note}; ${decl2.note}`
+      };
+    }
+    if (CONFIG_NAME.some((r) => r.test(name2)) || DOCKERISH.test(name2) || BUILD_FILE.test(name2)) return null;
+    const g = globalNamer(path, "");
+    if (g) return { kind: "all", reason: `a repo-root file ${g} names` };
+    const decl = declared2(path);
+    if (decl) return decl;
+    if (buildCache && ctx.format2)
+      return {
+        kind: "readers",
+        note: `a repo-root file no ${tools.has("turbo") ? "turbo.json" : "Nx"} input declares; only tests that read it run`
+      };
+    return null;
+  };
+}
+
 // ../engine/src/plan.ts
-var PLAN_VERSION = "plan@2";
+var PLAN_VERSION = "plan@3";
 var DEFAULT_BOUNDS = { maxCommits: 200, maxAgeDays: 14, maxFiles: 2e3 };
 var ms = (a, b) => Math.round((b - a) * 10) / 10;
 function revOk(repo, rev) {
@@ -16325,22 +17369,22 @@ function packageOf(roots, p) {
   return best;
 }
 function affectedPackages(graph, changes) {
-  if (!graph.length) return null;
-  const roots = graph.map((w) => w.root);
+  if (!graph.packages.length) return null;
+  const roots = graph.packages.map((w) => w.root);
   const out2 = /* @__PURE__ */ new Set();
   for (const f of changes.files) {
     if (f.kind === "ignored" || f.kind === "ci" && !f.runAll) continue;
-    if (f.fileLevel === "read" && !f.runAll) continue;
-    if (f.kind === "lockfile" && f.packageScope && !f.runAll) {
+    if (f.packageScope && !f.runAll) {
       for (const s of f.packageScope) {
         if (!roots.includes(s)) return null;
-        for (const r of packageAndDependents(graph, s)) out2.add(r);
+        for (const r of withDependents(graph, [s])) out2.add(r);
       }
       continue;
     }
+    if (f.fileLevel === "read" && !f.runAll) continue;
     const root = packageOf(roots, f.path);
     if (!root) return null;
-    for (const r of packageAndDependents(graph, root)) out2.add(r);
+    for (const r of withDependents(graph, [root])) out2.add(r);
   }
   return out2;
 }
@@ -16545,6 +17589,14 @@ function planSelection(input) {
       return [];
     }
   })();
+  const pkgGraph = (() => {
+    try {
+      return mergeGraphs(readPackageGraph(gitTree(repo, from)), readPackageGraph(tree));
+    } catch (e) {
+      return { packages: [], tools: [], inputs: [], rootDeps: /* @__PURE__ */ new Set(), unreadable: String(e) };
+    }
+  })();
+  const workspaceRoots = [.../* @__PURE__ */ new Set([...graph.map((w) => w.root), ...pkgGraph.packages.map((p) => p.root)])];
   const basis = input.map ? "coverage" : graph.length && input.packageGrain !== false ? "package" : "none";
   if (basis === "none")
     return everything(from, "none", [
@@ -16574,7 +17626,7 @@ function planSelection(input) {
     map: input.map,
     readsAndChildren: mapInfo.reads && mapInfo.children,
     setup,
-    workspaceRoots: graph.map((w) => w.root),
+    workspaceRoots,
     isTest: (p) => knownTests.has(p) || classify(p) === "test"
   }) : void 0;
   const changes = changesFromGit(repo, from, head, {
@@ -16586,7 +17638,16 @@ function planSelection(input) {
     ...mapInfo?.reads && mapInfo.children && setup && !/hoist|node[-_]linker|npm_config_|pnpm_config_/i.test(setup.texts.join("\n")) && {
       lockfiles: "importers"
     },
-    ...narrow && { narrow }
+    ...narrow && { narrow },
+    // Selection rule 4 (plan@3): the package-graph fallback for files that would run everything.
+    ...!pkgGraph.unreadable && pkgGraph.packages.length && {
+      fallback: packageFallback({
+        tree,
+        graph: pkgGraph,
+        format2: !!(mapInfo?.reads && mapInfo.children),
+        setup
+      })
+    }
   });
   for (const t of changes.changedTests) universeSet.add(t);
   const t2 = performance.now();
@@ -16626,8 +17687,9 @@ function planSelection(input) {
     if (rs) rs.push(r);
     else tests.set(t, [r]);
   };
-  const affected = affectedPackages(graph, changes);
-  const roots = graph.map((w) => w.root);
+  const wsGraph = { packages: graph.map((w) => ({ root: w.root, names: [w.name], deps: w.deps })) };
+  const affected = affectedPackages(wsGraph, changes);
+  const roots = wsGraph.packages.map((w) => w.root);
   const inAffected = (t) => {
     if (!affected) return true;
     const root = packageOf(roots, t);
@@ -16642,7 +17704,7 @@ function planSelection(input) {
   const t3 = performance.now();
   timings.selectMs = ms(t2, t3);
   const changedCode = changes.files.filter(
-    (f) => f.status !== "deleted" && (f.kind === "source" || f.kind === "test") && (isJs(f.path) || isPy(f.path))
+    (f) => f.status !== "deleted" && ((f.kind === "source" || f.kind === "test") && (isJs(f.path) || isPy(f.path)) || !f.runAll && f.kind !== "lockfile" && f.kind !== "ignored" && f.kind !== "ci" && !!f.packageScope)
   ).map((f) => f.path);
   if (changedCode.length) {
     const isTest = (p) => universeSet.has(p) || classify(p, { knownTests }) === "test";
@@ -16670,13 +17732,7 @@ function planSelection(input) {
   if (input.map)
     for (const f of changes.files) {
       if (f.kind !== "unknown" || f.fileLevel !== "read" || f.runAll) continue;
-      const namers = loadedNamers(
-        tree,
-        input.map,
-        universeSet,
-        f.path,
-        graph.map((w) => w.root)
-      );
+      const namers = loadedNamers(tree, input.map, universeSet, f.path, workspaceRoots);
       if (!namers.size) continue;
       for (const [t, rec] of input.map.tests)
         if (universeSet.has(t) && (namers.has(t) || [...namers].some((n) => rec.loaded.has(n))))
@@ -17260,10 +18316,10 @@ var LIMITS = {
   /** One test (or step) longer than this is a clock error. */
   durationMs: 24 * 3600 * 1e3
 };
-var isObj2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var isObj3 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 function canonicalJson(v) {
   if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
-  if (isObj2(v))
+  if (isObj3(v))
     return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(",")}}`;
   return JSON.stringify(v ?? null);
 }
@@ -17284,7 +18340,7 @@ var sha256 = (s) => createHash3("sha256").update(s).digest("hex");
 // src/step/ledger-inputs.ts
 var MAX_INPUT_FILES = 5e4;
 var DAY = /^\d{4}-\d{2}-\d{2}$/;
-var isObj3 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var isObj4 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 var utcDay = (ms2) => new Date(ms2).toISOString().slice(0, 10);
 function validDay(s) {
   return typeof s === "string" && DAY.test(s) && utcDay(Date.parse(`${s}T00:00:00Z`)) === s;
@@ -17302,8 +18358,8 @@ function historyText(h) {
 }
 var inputDigest = (text) => sha256(text);
 function parseLedgerInputs(v) {
-  if (!isObj3(v) || !validDay(v.until)) throw new Error("the ledger inputs have no valid until day");
-  if (!isObj3(v.durations)) throw new Error("the ledger inputs have no durations object");
+  if (!isObj4(v) || !validDay(v.until)) throw new Error("the ledger inputs have no valid until day");
+  if (!isObj4(v.durations)) throw new Error("the ledger inputs have no durations object");
   if (!Array.isArray(v.history)) throw new Error("the ledger inputs have no history list");
   const files = Object.keys(v.durations);
   if (files.length > MAX_INPUT_FILES || v.history.length > MAX_INPUT_FILES)
@@ -17317,7 +18373,7 @@ function parseLedgerInputs(v) {
   }
   const history = [];
   for (const h of v.history) {
-    if (!isObj3(h) || typeof h.file !== "string" || !h.file || typeof h.failedAt !== "string")
+    if (!isObj4(h) || typeof h.file !== "string" || !h.file || typeof h.failedAt !== "string")
       throw new Error("a ledger history entry is not {file, failedAt}");
     history.push({ file: h.file, failedAt: h.failedAt });
   }
@@ -17336,6 +18392,8 @@ async function fetchConfig(t, token) {
     throw new ServiceError(`GET ${path}: unknown mode ${JSON.stringify(cfg.mode)}`);
   if (cfg.selectionEnforce !== void 0 && (!Array.isArray(cfg.selectionEnforce) || cfg.selectionEnforce.some((k) => typeof k !== "string")))
     throw new ServiceError(`GET ${path}: selectionEnforce must be a list of strings`);
+  if (cfg.landingMode !== void 0 && cfg.landingMode !== "queue" && cfg.landingMode !== "no_queue" && cfg.landingMode !== "unknown")
+    throw new ServiceError(`GET ${path}: unknown landingMode ${JSON.stringify(cfg.landingMode)}`);
   const l = cfg.ledger;
   if (l !== void 0 && (!l || typeof l.stale !== "boolean" || typeof l.complete !== "boolean" || typeof l.lagMs !== "number" || !Array.isArray(l.reasons)))
     throw new ServiceError(`GET ${path}: malformed ledger freshness`);
@@ -17415,8 +18473,8 @@ var quarantinedFiles = (entries) => [...new Set(entries.map((e) => e.file))].sor
 var MAX_ROWS = 300;
 var MAX_SKIPPED = 1e3;
 var MAX_BYTES2 = 9e5;
-var esc2 = (s) => s.replace(/[&<>"'|`]/g, (c) => `&#${c.charCodeAt(0)};`).replace(/\r?\n/g, " ");
-var code = (s) => `<code>${esc2(s)}</code>`;
+var esc3 = (s) => s.replace(/[&<>"'|`]/g, (c) => `&#${c.charCodeAt(0)};`).replace(/\r?\n/g, " ");
+var code = (s) => `<code>${esc3(s)}</code>`;
 var list = (xs, n = 3) => xs.slice(0, n).map(code).join(", ") + (xs.length > n ? ` and ${xs.length - n} more` : "");
 var fnName = (id) => id.slice(id.lastIndexOf("::") + 2);
 var short = (sha) => sha.slice(0, 10);
@@ -17453,8 +18511,8 @@ function describeReason(r) {
   }
 }
 function describeFile(f) {
-  const note = f.note ? ` (${esc2(f.note)})` : "";
-  if (f.runAll) return `runs everything: ${esc2(f.runAll)}`;
+  const note = f.note ? ` (${esc3(f.note)})` : "";
+  if (f.runAll) return `runs everything: ${esc3(f.runAll)}`;
   if (f.packageScope?.length) return `runs every test in ${list(f.packageScope, 5)}${note}`;
   if (f.kind === "test") return "runs itself";
   if (f.kind === "snapshot") return "runs its test file";
@@ -17491,24 +18549,24 @@ function renderSummary(r) {
     out2.push("", "> Report mode changes nothing: this run tests everything. Set `mode: enforce` to skip.");
   } else if (report) {
     out2.push("## Tensile (report mode): would run everything");
-    out2.push("", `> ${esc2(runAllReason(sel, d))}`);
+    out2.push("", `> ${esc3(runAllReason(sel, d))}`);
   } else if (r.runAll) {
-    out2.push("## Tensile: running everything", "", `> ${esc2(r.reason ?? "")}`);
+    out2.push("## Tensile: running everything", "", `> ${esc3(r.reason ?? "")}`);
   } else {
     out2.push(`## Tensile: ${r.tests.length} of ${universe} test files (${share()}${sampledNote})`);
   }
   out2.push("");
-  for (const w of r.warnings) out2.push(`> **Warning:** ${esc2(w)}`, "");
+  for (const w of r.warnings) out2.push(`> **Warning:** ${esc3(w)}`, "");
   if (d) {
     const facts = [
-      `Base ${code(short(d.base))} (${esc2(d.baseFrom)}) \u2192 head ${code(short(d.head))}.`,
-      d.map ? `Map: ${d.map.tests} tests, ${(d.map.bytes / 1024).toFixed(1)} KB` + (d.map.commit ? `, recorded at ${code(short(d.map.commit))}` : "") + (d.map.createdAt ? ` on ${esc2(d.map.createdAt)}` : "") + "." : "",
+      `Base ${code(short(d.base))} (${esc3(d.baseFrom)}) \u2192 head ${code(short(d.head))}.`,
+      d.map ? `Map: ${d.map.tests} tests, ${(d.map.bytes / 1024).toFixed(1)} KB` + (d.map.commit ? `, recorded at ${code(short(d.map.commit))}` : "") + (d.map.createdAt ? ` on ${esc3(d.map.createdAt)}` : "") + "." : "",
       `Took ${Math.round(r.ms)} ms (map ${d.timings.mapMs} ms, diff ${d.timings.diffMs} ms, select ${d.timings.selectMs} ms).`
     ];
     out2.push(facts.filter(Boolean).join(" "), "");
   }
   if (r.pruned) {
-    const combo = Object.entries(r.pruned.kept).map(([k, v]) => `${esc2(k)}: ${code(typeof v === "string" ? v : JSON.stringify(v))}`).join(", ");
+    const combo = Object.entries(r.pruned.kept).map(([k, v]) => `${esc3(k)}: ${code(typeof v === "string" ? v : JSON.stringify(v))}`).join(", ");
     const verb = r.mode === "report" ? "Would run" : "Running";
     out2.push(
       `**Matrix:** ${verb} 1 of ${r.pruned.total} combinations (${combo}). The full matrix runs at merge.`,
@@ -17518,7 +18576,7 @@ function renderSummary(r) {
   if (r.quarantine.length) {
     const byFile = /* @__PURE__ */ new Map();
     for (const e of r.quarantine) {
-      const why = `${esc2(e.test.slice(e.file.length + 3) || e.test)}: ${esc2(e.reason)}, ${e.flips} flip(s), last ${esc2(e.lastSeen)}`;
+      const why = `${esc3(e.test.slice(e.file.length + 3) || e.test)}: ${esc3(e.reason)}, ${e.flips} flip(s), last ${esc3(e.lastSeen)}`;
       byFile.set(e.file, [...byFile.get(e.file) ?? [], why]);
     }
     out2.push(`### ${r.mode === "report" ? "Would quarantine" : "Quarantined"} (${byFile.size})`, "");
@@ -17580,6 +18638,26 @@ function renderSummary(r) {
 
 // src/gate.ts
 var rawMatrix = (env) => getInput(env, "matrix");
+var GATE_POLICY_VERSION = "legacy-gate@1";
+function gateBarKey(env) {
+  const wf = /^[^/]+\/[^/]+\/(.+?)@/.exec(env.GITHUB_WORKFLOW_REF ?? "")?.[1];
+  const job = env.GITHUB_JOB ?? "";
+  if (!wf || !job) return null;
+  return `${wf}#${job}#${GATE_POLICY_VERSION}`;
+}
+function enforceBlocked(cfg, key, env, event) {
+  const into = event.pull_request?.base?.ref;
+  const main = event.repository?.default_branch;
+  if (env.GITHUB_EVENT_NAME !== "pull_request" || !into || !main || into !== main)
+    return "only a pull request into the default branch, whose landing mode the service reads, may enforce";
+  if (!cfg) return "no service config";
+  if (!key) return "no workflow ref or job to grant enforcement for";
+  if (!Array.isArray(cfg.selectionEnforce) || !cfg.selectionEnforce.includes(key))
+    return `the service hasn't enabled enforcement for ${key}`;
+  if (cfg.landingMode !== "queue")
+    return `the repo isn't read as a merge-queue repo (landing mode ${cfg.landingMode ?? "unknown"}): its PR runs may be the landing gate`;
+  return null;
+}
 function repoPath(repo, input) {
   if (!input) return null;
   const rel = relative(resolve2(repo), resolve2(process.cwd(), input));
@@ -17657,6 +18735,8 @@ async function decideLocal(env, deps, svc) {
     if (!(e instanceof InputError)) throw e;
     return full(`invalid input: ${e.message}`);
   }
+  const asked = inputs.mode;
+  inputs.mode = "report";
   let plan;
   try {
     event = readEvent(env);
@@ -17666,15 +18746,22 @@ async function decideLocal(env, deps, svc) {
   }
   if (plan.kind === "full") return full(plan.reason);
   let token = null;
+  let cfg = svc ? null : deps.config ?? null;
+  let mode = asked;
   if (svc) {
     try {
       token = await svc.token();
-      const cfg = await fetchConfig(svc.target, token);
+      cfg = await fetchConfig(svc.target, token);
       if (cfg.runAll) return full(`service kill switch is on${cfg.reason ? `: ${cfg.reason}` : ""}`);
-      if (cfg.mode) inputs.mode = cfg.mode;
+      if (cfg.mode) mode = cfg.mode;
     } catch (e) {
       return full(`service: ${e.message}`);
     }
+  }
+  let refused = null;
+  if (mode === "enforce") {
+    refused = enforceBlocked(cfg, gateBarKey(env), env, event);
+    if (!refused) inputs.mode = "enforce";
   }
   let quarantine = [];
   const quarantineWarnings = [];
@@ -17729,10 +18816,14 @@ async function decideLocal(env, deps, svc) {
     quarantineWarnings.push(`${decision.quarantineIgnored}; quarantining nothing`);
   const applied = quarantine.filter((e) => present.has(e.file));
   if (inputs.mode === "report") {
-    const r = full("report mode: everything runs; the summary shows what enforce mode would skip", decision);
+    const r = full(
+      refused ? `report mode (enforce refused: ${refused}): everything runs together; the summary shows what enforce mode would skip` : "report mode: everything runs; the summary shows what enforce mode would skip",
+      decision
+    );
     r.result.pruned = pruned;
     r.result.quarantine = applied;
     r.result.warnings.push(...quarantineWarnings);
+    if (refused) r.result.warnings.push(`enforce mode refused, everything runs: ${refused}`);
     return r;
   }
   if (sel.runAll) {
@@ -19592,8 +20683,8 @@ function selectionRecord(d, outcomes) {
 }
 
 // src/step/summary.ts
-var esc3 = (s) => s.replace(/[&<>"'|`]/g, (c) => `&#${c.charCodeAt(0)};`).replace(/\r?\n/g, " ");
-var code2 = (s) => `<code>${esc3(s)}</code>`;
+var esc4 = (s) => s.replace(/[&<>"'|`]/g, (c) => `&#${c.charCodeAt(0)};`).replace(/\r?\n/g, " ");
+var code2 = (s) => `<code>${esc4(s)}</code>`;
 var list2 = (xs, n = 3) => xs.slice(0, n).map(code2).join(", ") + (xs.length > n ? ` and ${xs.length - n} more` : "");
 var MAX_ROWS2 = 200;
 var MAX_BYTES3 = 9e5;
@@ -19602,7 +20693,7 @@ function describePlanReason(r) {
     case "static":
       return `its static imports reach ${list2(r.files)}`;
     case "history":
-      return `failed recently (${esc3(r.failedAt.slice(0, 10))}) in an affected package`;
+      return `failed recently (${esc4(r.failedAt.slice(0, 10))}) in an affected package`;
     case "package-grain":
       return `no coverage map; ${code2(r.root)} is affected`;
     case "spawns":
@@ -19618,7 +20709,7 @@ function renderDecision(d) {
   const out2 = [`### Tensile selection (${d.mode})`, ""];
   const total = d.universe;
   const runs = d.selected.length + d.sampled.length;
-  if (d.runAll) out2.push(`**Runs everything:** ${esc3(d.reasons.join("; ") || "no reason recorded")}`, "");
+  if (d.runAll) out2.push(`**Runs everything:** ${esc4(d.reasons.join("; ") || "no reason recorded")}`, "");
   else if (d.mode === "enforce")
     out2.push(
       `Runs **${runs} of ${total}** test files (${d.sampled.length} sampled as a check); skips ${d.skipped.length}.`,
@@ -19629,13 +20720,13 @@ function renderDecision(d) {
       `Everything runs (shadow). Selection would run **${runs} of ${total}** test files and skip ${d.skipped.length}.`,
       ""
     );
-  if (d.modeReason) out2.push(`Not enforcing: ${esc3(d.modeReason)}.`, "");
+  if (d.modeReason) out2.push(`Not enforcing: ${esc4(d.modeReason)}.`, "");
   if (d.map)
     out2.push(
-      `Map: ${code2(d.map.source)}${d.map.commit ? ` at ${code2(d.map.commit.slice(0, 10))}` : ""}, ${d.map.verified ? `signature verified (key ${code2(d.map.keyId ?? "")})` : `**unverified**${d.map.problem ? ` (${esc3(d.map.problem)})` : ""}`}${d.map.distance !== null ? `, ${d.map.distance} commits behind the base` : ""}.`,
+      `Map: ${code2(d.map.source)}${d.map.commit ? ` at ${code2(d.map.commit.slice(0, 10))}` : ""}, ${d.map.verified ? `signature verified (key ${code2(d.map.keyId ?? "")})` : `**unverified**${d.map.problem ? ` (${esc4(d.map.problem)})` : ""}`}${d.map.distance !== null ? `, ${d.map.distance} commits behind the base` : ""}.`,
       ""
     );
-  else if (!d.runAll) out2.push(`No coverage map: ${esc3(d.basis)} grain.`, "");
+  else if (!d.runAll) out2.push(`No coverage map: ${esc4(d.basis)} grain.`, "");
   if (!d.runAll && d.selected.length) {
     out2.push("<details><summary>Selected tests and why</summary>", "", "| Test | Why |", "| --- | --- |");
     for (const s of d.selected.slice(0, MAX_ROWS2))
@@ -19660,7 +20751,7 @@ function renderOutcome(d, o) {
       d.runAll ? "Nothing was skipped, so nothing could be missed." : `No miss: ${o2.failed.length} failing test file(s), all selected; every skipped test passed.`,
       ""
     );
-  else out2.push(`Unknown: ${esc3(o.note ?? "not enough evidence")}.`, "");
+  else out2.push(`Unknown: ${esc4(o.note ?? "not enough evidence")}.`, "");
   out2.push(`Verdict \`${o.verdict}\` (${o.kind}), recorded for the ledger.`, "");
   const p = d.shardProjection;
   if (p && p.auto.n > 1) {
