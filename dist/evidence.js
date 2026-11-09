@@ -187682,7 +187682,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         return ts_textChanges_exports.ChangeTracker.with(
           { host, formatContext, preferences },
           (changeTracker) => {
-            const parsed = contents.map((c) => parse4(sourceFile, c));
+            const parsed = contents.map((c) => parse5(sourceFile, c));
             const flattenedLocations = focusLocations && flatten(focusLocations);
             for (const nodes of parsed) {
               placeNodeGroup(
@@ -187695,7 +187695,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           }
         );
       }
-      function parse4(sourceFile, content) {
+      function parse5(sourceFile, content) {
         const nodeKinds = [
           {
             parse: () => createSourceFile(
@@ -213042,7 +213042,7 @@ var require_stringify = __commonJS({
         props.push(doc.directives.tagString(tag));
       return props.join(" ");
     }
-    function stringify(item, ctx, onComment, onChompKeep) {
+    function stringify2(item, ctx, onComment, onChompKeep) {
       if (identity.isPair(item))
         return item.toString(ctx, onComment, onChompKeep);
       if (identity.isAlias(item)) {
@@ -213071,7 +213071,7 @@ var require_stringify = __commonJS({
 ${ctx.indent}${str}`;
     }
     exports.createStringifyContext = createStringifyContext;
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -213081,7 +213081,7 @@ var require_stringifyPair = __commonJS({
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
@@ -213103,7 +213103,7 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      let str = stringify2.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
       if (!explicitKey && !ctx.inFlow && str.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
@@ -213155,7 +213155,7 @@ ${indent}:`;
         ctx.indent = ctx.indent.substring(2);
       }
       let valueCommentDone = false;
-      const valueStr = stringify.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
+      const valueStr = stringify2.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
       let ws = " ";
       if (keyComment || vsb || vcb) {
         ws = vsb ? "\n" : "";
@@ -213296,7 +213296,7 @@ var require_addPairToJSMap = __commonJS({
     "use strict";
     var log = require_log();
     var merge2 = require_merge();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var identity = require_identity();
     var toJS = require_toJS();
     function addPairToJSMap(ctx, map, { key, value }) {
@@ -213332,7 +213332,7 @@ var require_addPairToJSMap = __commonJS({
       if (typeof jsKey !== "object")
         return String(jsKey);
       if (identity.isNode(key) && ctx?.doc) {
-        const strCtx = stringify.createStringifyContext(ctx.doc, {});
+        const strCtx = stringify2.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node of ctx.anchors.keys())
           strCtx.anchors.add(node.anchor);
@@ -213399,12 +213399,12 @@ var require_stringifyCollection = __commonJS({
   "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
       const flow = ctx.inFlow ?? collection.flow;
-      const stringify2 = flow ? stringifyFlowCollection : stringifyBlockCollection;
-      return stringify2(collection, ctx, options);
+      const stringify3 = flow ? stringifyFlowCollection : stringifyBlockCollection;
+      return stringify3(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
       const { indent, options: { commentString } } = ctx;
@@ -213429,7 +213429,7 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str2 = stringify2.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
@@ -213496,7 +213496,7 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify.stringify(item, itemCtx, () => comment = null);
+        let str = stringify2.stringify(item, itemCtx, () => comment = null);
         reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
         if (i2 < items.length - 1) {
           str += ",";
@@ -214857,7 +214857,7 @@ var require_stringifyDocument = __commonJS({
   "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
       const lines = [];
@@ -214872,7 +214872,7 @@ var require_stringifyDocument = __commonJS({
       }
       if (hasDirectives)
         lines.push("---");
-      const ctx = stringify.createStringifyContext(doc, options);
+      const ctx = stringify2.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
         if (lines.length !== 1)
@@ -214894,7 +214894,7 @@ var require_stringifyDocument = __commonJS({
           contentComment = doc.contents.comment;
         }
         const onChompKeep = contentComment ? void 0 : () => chompKeep = true;
-        let body2 = stringify.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
+        let body2 = stringify2.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body2 += stringifyComment.lineComment(body2, "", commentString(contentComment));
         if ((body2[0] === "|" || body2[0] === ">") && lines[lines.length - 1] === "---") {
@@ -214902,7 +214902,7 @@ var require_stringifyDocument = __commonJS({
         } else
           lines.push(body2);
       } else {
-        lines.push(stringify.stringify(doc.contents, ctx));
+        lines.push(stringify2.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
@@ -217038,7 +217038,7 @@ var require_cst_scalar = __commonJS({
 var require_cst_stringify = __commonJS({
   "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
-    var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
+    var stringify2 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
       switch (token.type) {
         case "block-scalar": {
@@ -217091,7 +217091,7 @@ var require_cst_stringify = __commonJS({
         res += stringifyToken(value);
       return res;
     }
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -218802,7 +218802,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse4(src, reviver, options) {
+    function parse5(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -218821,7 +218821,7 @@ var require_public_api = __commonJS({
       }
       return doc.toJS(Object.assign({ reviver: _reviver }, options));
     }
-    function stringify(value, replacer, options) {
+    function stringify2(value, replacer, options) {
       let _replacer = null;
       if (typeof replacer === "function" || Array.isArray(replacer)) {
         _replacer = replacer;
@@ -218843,10 +218843,10 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse4;
+    exports.parse = parse5;
     exports.parseAllDocuments = parseAllDocuments2;
     exports.parseDocument = parseDocument2;
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -224499,12 +224499,16 @@ var PART_FORMAT = 2;
 var FORMAT_MARK = fnId("", `jiffy:v${PART_FORMAT}`);
 var CHILDREN_MARK = fnId("", "jiffy:children");
 
+// ../engine/src/specs.ts
+var MAX_SPEC_SCAN_BYTES = 2 * 1024 * 1024;
+
+// ../engine/src/workflow-jobs.ts
+var import_yaml3 = __toESM(require_dist(), 1);
+var MAX_WORKFLOW_BYTES = 1024 * 1024;
+
 // ../engine/src/narrow.ts
 var MAX_CORPUS_BYTES = 256 * 1024 * 1024;
 var MAX_TEXT = 2 * 1024 * 1024;
-
-// ../engine/src/specs.ts
-var MAX_SPEC_SCAN_BYTES = 2 * 1024 * 1024;
 
 // ../engine/src/plan.ts
 var SPAWN = new RegExp(
@@ -228979,7 +228983,7 @@ function summarize(status, findings, changes, mutants, policy) {
 }
 
 // src/context.ts
-var import_yaml3 = __toESM(require_dist(), 1);
+var import_yaml4 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync14 } from "node:fs";
 function isForkPr(event) {
   const head = event.pull_request?.head?.repo?.full_name;
@@ -229502,7 +229506,7 @@ var MAX_POLICY_BYTES = 64 * 1024;
 var isWorkflowFile = (p) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(p);
 
 // src/policy.ts
-var import_yaml4 = __toESM(require_dist(), 1);
+var import_yaml5 = __toESM(require_dist(), 1);
 import { createHash as createHash5 } from "node:crypto";
 var MAX_ALIASES = 1e3;
 var YamlError = class extends Error {
@@ -229516,22 +229520,22 @@ var YamlError = class extends Error {
 function parseYaml2(text, maxBytes = MAX_YAML_BYTES, opts = {}) {
   if (Buffer.byteLength(text) > maxBytes) throw new YamlError(`larger than ${maxBytes / 1024} KB`, "size");
   try {
-    const doc = (0, import_yaml4.parseDocument)(text, {
+    const doc = (0, import_yaml5.parseDocument)(text, {
       uniqueKeys: false,
       prettyErrors: false,
       ...opts.strings && { schema: "failsafe" }
     });
     if (doc.errors.length) throw new YamlError(doc.errors[0].message.split("\n")[0], "syntax");
     let dup = null;
-    (0, import_yaml4.visit)(doc, {
+    (0, import_yaml5.visit)(doc, {
       Map(_, node) {
-        if (!(0, import_yaml4.isMap)(node)) return;
+        if (!(0, import_yaml5.isMap)(node)) return;
         const seen = /* @__PURE__ */ new Set();
         for (const pair of node.items) {
-          const k = (0, import_yaml4.isScalar)(pair.key) ? String(pair.key.value) : JSON.stringify(pair.key ?? null);
+          const k = (0, import_yaml5.isScalar)(pair.key) ? String(pair.key.value) : JSON.stringify(pair.key ?? null);
           if (seen.has(k)) {
             dup = k;
-            return import_yaml4.visit.BREAK;
+            return import_yaml5.visit.BREAK;
           }
           seen.add(k);
         }
@@ -229626,7 +229630,7 @@ function policyHash(p) {
 // src/mainOnly.ts
 var MAX_CHANGED_FILES = 3e3;
 var MATCH_BUDGET = 5e7;
-function parseWorkflow(text) {
+function parseWorkflow2(text) {
   const raw2 = parseYaml2(text, MAX_YAML_BYTES, { strings: true });
   if (!isRecord(raw2)) throw new Error("not a mapping");
   const onRaw = raw2.on;
@@ -229643,7 +229647,7 @@ var ParseCache = class {
     let v = this.m.get(text);
     if (!v) {
       try {
-        v = parseWorkflow(text);
+        v = parseWorkflow2(text);
       } catch (e) {
         v = e;
       }
@@ -229758,13 +229762,13 @@ function allowEntry(dispatch, path, names2) {
   ) ?? null;
 }
 function plan(cache2, opts) {
-  const parse4 = (t) => {
+  const parse5 = (t) => {
     if (t === void 0) return null;
     const p = cache2.get(t);
     return p instanceof Error ? null : p;
   };
-  const b = parse4(opts.base);
-  const h = parse4(opts.dispatchHead);
+  const b = parse5(opts.base);
+  const h = parse5(opts.dispatchHead);
   const entry = allowEntry(opts.dispatch, opts.path, [b?.name ?? null, h?.name ?? null]);
   if (!entry) return { allowed: false, reason: "not listed in main_only_dispatch" };
   if (opts.fork) return { allowed: false, reason: "pull request from a fork" };

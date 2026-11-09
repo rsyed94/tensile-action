@@ -1507,7 +1507,7 @@ var require_stringify = __commonJS({
         props.push(doc.directives.tagString(tag));
       return props.join(" ");
     }
-    function stringify(item, ctx, onComment, onChompKeep) {
+    function stringify2(item, ctx, onComment, onChompKeep) {
       if (identity.isPair(item))
         return item.toString(ctx, onComment, onChompKeep);
       if (identity.isAlias(item)) {
@@ -1536,7 +1536,7 @@ var require_stringify = __commonJS({
 ${ctx.indent}${str}`;
     }
     exports.createStringifyContext = createStringifyContext;
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -1546,7 +1546,7 @@ var require_stringifyPair = __commonJS({
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
@@ -1568,7 +1568,7 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      let str = stringify2.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
       if (!explicitKey && !ctx.inFlow && str.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
@@ -1620,7 +1620,7 @@ ${indent}:`;
         ctx.indent = ctx.indent.substring(2);
       }
       let valueCommentDone = false;
-      const valueStr = stringify.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
+      const valueStr = stringify2.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
       let ws = " ";
       if (keyComment || vsb || vcb) {
         ws = vsb ? "\n" : "";
@@ -1761,7 +1761,7 @@ var require_addPairToJSMap = __commonJS({
     "use strict";
     var log = require_log();
     var merge = require_merge();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var identity = require_identity();
     var toJS = require_toJS();
     function addPairToJSMap(ctx, map, { key, value }) {
@@ -1797,7 +1797,7 @@ var require_addPairToJSMap = __commonJS({
       if (typeof jsKey !== "object")
         return String(jsKey);
       if (identity.isNode(key) && ctx?.doc) {
-        const strCtx = stringify.createStringifyContext(ctx.doc, {});
+        const strCtx = stringify2.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node of ctx.anchors.keys())
           strCtx.anchors.add(node.anchor);
@@ -1864,12 +1864,12 @@ var require_stringifyCollection = __commonJS({
   "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
       const flow = ctx.inFlow ?? collection.flow;
-      const stringify2 = flow ? stringifyFlowCollection : stringifyBlockCollection;
-      return stringify2(collection, ctx, options);
+      const stringify3 = flow ? stringifyFlowCollection : stringifyBlockCollection;
+      return stringify3(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
       const { indent, options: { commentString } } = ctx;
@@ -1894,7 +1894,7 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str2 = stringify2.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
@@ -1961,7 +1961,7 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify.stringify(item, itemCtx, () => comment = null);
+        let str = stringify2.stringify(item, itemCtx, () => comment = null);
         reqNewline || (reqNewline = lines4.length > linesAtValue || str.includes("\n"));
         if (i2 < items.length - 1) {
           str += ",";
@@ -3322,7 +3322,7 @@ var require_stringifyDocument = __commonJS({
   "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
       const lines4 = [];
@@ -3337,7 +3337,7 @@ var require_stringifyDocument = __commonJS({
       }
       if (hasDirectives)
         lines4.push("---");
-      const ctx = stringify.createStringifyContext(doc, options);
+      const ctx = stringify2.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
         if (lines4.length !== 1)
@@ -3359,7 +3359,7 @@ var require_stringifyDocument = __commonJS({
           contentComment = doc.contents.comment;
         }
         const onChompKeep = contentComment ? void 0 : () => chompKeep = true;
-        let body2 = stringify.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
+        let body2 = stringify2.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body2 += stringifyComment.lineComment(body2, "", commentString(contentComment));
         if ((body2[0] === "|" || body2[0] === ">") && lines4[lines4.length - 1] === "---") {
@@ -3367,7 +3367,7 @@ var require_stringifyDocument = __commonJS({
         } else
           lines4.push(body2);
       } else {
-        lines4.push(stringify.stringify(doc.contents, ctx));
+        lines4.push(stringify2.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
@@ -5503,7 +5503,7 @@ var require_cst_scalar = __commonJS({
 var require_cst_stringify = __commonJS({
   "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
-    var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
+    var stringify2 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
       switch (token.type) {
         case "block-scalar": {
@@ -5556,7 +5556,7 @@ var require_cst_stringify = __commonJS({
         res += stringifyToken(value);
       return res;
     }
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -7267,7 +7267,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse4(src, reviver, options) {
+    function parse5(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -7286,7 +7286,7 @@ var require_public_api = __commonJS({
       }
       return doc.toJS(Object.assign({ reviver: _reviver }, options));
     }
-    function stringify(value, replacer, options) {
+    function stringify2(value, replacer, options) {
       let _replacer = null;
       if (typeof replacer === "function" || Array.isArray(replacer)) {
         _replacer = replacer;
@@ -7308,10 +7308,10 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse4;
+    exports.parse = parse5;
     exports.parseAllDocuments = parseAllDocuments2;
     exports.parseDocument = parseDocument;
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -7628,6 +7628,7 @@ var RUN_ALL_KINDS = /* @__PURE__ */ new Set([
 ]);
 var TEST_FILE = /(^|[./])(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.py$/;
 var SOURCE_FILE = /\.([cm]?[jt]sx?|py)$/;
+var VUE_FILE = /\.vue$/;
 var SNAPSHOT = /(^|\/)__snapshots__\/([^/]+)\.snap$/;
 var SYRUPY = /(^|\/)__snapshots__\/((?:test_[^/]+|[^/]+_test))(?:\.ambr|\/[^/]+)$/;
 var base = (p) => p.slice(p.lastIndexOf("/") + 1);
@@ -7709,7 +7710,7 @@ function classify(path, opts = {}) {
   if (SNAPSHOT.test(path) || SYRUPY.test(path)) return "snapshot";
   if (IGNORED.some((r) => r.test(path))) return "ignored";
   if (TEST_FILE.test(path)) return "test";
-  if (SOURCE_FILE.test(path)) return "source";
+  if (SOURCE_FILE.test(path) || VUE_FILE.test(path)) return "source";
   return "unknown";
 }
 function snapshotTestFile(path) {
@@ -16020,7 +16021,10 @@ function analyzeChanges(diffs, read, opts = {}) {
     if (kind === "snapshot") {
       const t = snapshotTestFile(d.path);
       if (t && (!opts.knownTests || opts.knownTests.has(t))) cs.changedTests.add(t);
-      else fc.runAll = "snapshot without a known test file";
+      else if (t && opts.inScope && !opts.inScope(t)) {
+        fc.fileLevel = "read";
+        fc.note = "a snapshot of a test outside the job's test paths; only tests that read it run";
+      } else fc.runAll = "snapshot without a known test file";
     } else if (narrowed) {
       fc.fileLevel = "read";
       fc.note = narrowed;
@@ -16337,191 +16341,6 @@ function durationsFromReport(report, root) {
   return out2;
 }
 
-// ../engine/src/narrow.ts
-var WORKFLOW2 = /^\.github\/workflows\/[^/]+\.ya?ml$/;
-var LOCAL_USES = /^[ \t]*-?[ \t]*uses:[ \t]*['"]?\.\/([^'"\s#]*)['"]?/gm;
-var DATA_FILE = /\.(json|jsonc|json5|jsonl|ndjson|ya?ml|toml|txt|csv|tsv|xml|html?|ini|properties)$/i;
-var CONFIG_NAME = [
-  /^(Dockerfile|Containerfile|Makefile|GNUmakefile|makefile|justfile|Justfile|Taskfile|Procfile|Brewfile|Gemfile|Rakefile|Vagrantfile|Jenkinsfile|CMakeLists|BUILD|WORKSPACE|MODULE|Pipfile|MANIFEST)(\..*)?$/,
-  /\.(dockerfile|mk|cmake|bzl|bazel|nix)$/i,
-  /^(docker-)?compose([.-][\w.-]*)?\.ya?ml$/,
-  /(^|[.\-_])(config|conf|settings)\.\w+$/i,
-  /^(renovate|biome|deno|jsr|vercel|firebase|app|angular|project|workspace|rush|components|tsdoc|api-extractor|typedoc|cypress|nodemon|lefthook|import_map|importmap|pyrightconfig|manifest|codecov|environment|mkdocs|sonar-project|wrangler|netlify|fly|render|railway|now|package|bunfig|ruff|mypy|pylintrc|setup|tox|pytest|constraints|requirements)\b[\w.-]*$/i,
-  /\.code-workspace$/
-];
-var RUNNER_CONFIG = /(^|\/)(vite|vitest|jest|webpack|rollup|babel|rspack|rsbuild|esbuild|tsup|postcss|tailwind|svelte|astro|nuxt|next)\.(config|workspace)(\.[\w-]+)*\.[cm]?[jt]s(on)?$|(^|\/)\.babelrc(\.[cm]?js(on)?)?$/;
-var MAIN_PROCESS = /\b(plugins|transform|globalSetup|globalTeardown|preprocess|resolveId|setupNodeEvents)\b/;
-var PKG_RUNNER_KEYS = /"(babel|globalSetup|globalTeardown|transform)"\s*:/;
-var TEXT_FILE = /\.([cm]?[jt]sx?|py|json|jsonc|json5|ya?ml|toml|txt|xml|html?|ini|cfg|properties|sh|bash|zsh|fish|ps1|bat|cmd|mk|just|rb|go|rs|java|kt|kts|gradle|php|pl|lua|swift|cs|scala|groovy|r|jl|vue|svelte|astro|mdx)$/i;
-var NAMED_SCRIPT = /^(Dockerfile|Containerfile|Makefile|GNUmakefile|makefile|justfile|Justfile|Taskfile|Rakefile|Procfile|Jenkinsfile)(\..*)?$/;
-var MAX_CORPUS_FILES = 3e4;
-var MAX_CORPUS_BYTES = 256 * 1024 * 1024;
-var MAX_TEXT = 2 * 1024 * 1024;
-var baseOf4 = (p) => p.slice(p.lastIndexOf("/") + 1);
-var dirOf5 = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
-function normalize5(p) {
-  const out2 = [];
-  for (const s of p.split("/")) {
-    if (s === "" || s === ".") continue;
-    if (s === "..") {
-      if (!out2.length) return null;
-      out2.pop();
-    } else out2.push(s);
-  }
-  return out2.join("/");
-}
-function jobSetup(tree, workflow) {
-  const first = tree.read(workflow);
-  if (first === null) return null;
-  const workflows = /* @__PURE__ */ new Set([workflow]);
-  const actions = /* @__PURE__ */ new Set();
-  const texts = [];
-  const queue = [[workflow, first]];
-  while (queue.length) {
-    const [, text] = queue.shift();
-    texts.push(text);
-    for (const m of text.matchAll(LOCAL_USES)) {
-      const target = normalize5(m[1].replace(/@.*$/, ""));
-      if (target === null) continue;
-      if (WORKFLOW2.test(target)) {
-        if (workflows.has(target)) continue;
-        workflows.add(target);
-        const t = tree.read(target);
-        if (t !== null) queue.push([target, t]);
-      } else {
-        if (actions.has(target)) continue;
-        actions.add(target);
-        const prefix = target ? `${target}/` : "";
-        const t = tree.read(`${prefix}action.yml`) ?? tree.read(`${prefix}action.yaml`);
-        if (t !== null) queue.push([target, t]);
-      }
-    }
-  }
-  return { workflows: [...workflows].sort(), actions: [...actions].sort(), texts };
-}
-function jobActionFile(setup, path) {
-  for (const a of setup.actions) if (a === "" || path === a || path.startsWith(`${a}/`)) return a || ".";
-  return null;
-}
-function mainProcessReaders(tree) {
-  const paths = tree.paths().filter((p) => !p.includes("node_modules/"));
-  const configs = paths.filter((p) => RUNNER_CONFIG.test(p));
-  const pkgs = paths.filter((p) => p === "package.json" || p.endsWith("/package.json"));
-  tree.prefetch?.([...configs, ...pkgs]);
-  for (const c of configs) {
-    if (/(^|\/)(babel\.config|\.babelrc)/.test(c)) return `${c} configures Babel transforms`;
-    const src = tree.read(c);
-    if (src === null || MAIN_PROCESS.test(src))
-      return `${c} declares plugins, transforms or global setup that read files no recorder sees`;
-  }
-  for (const p of pkgs) {
-    const src = tree.read(p);
-    if (src !== null && PKG_RUNNER_KEYS.test(src)) return `${p} configures Babel, transforms or global setup`;
-  }
-  return null;
-}
-function corpus(ctx) {
-  const loaded = /* @__PURE__ */ new Set();
-  for (const rec of ctx.map.tests.values()) for (const l of rec.loaded) loaded.add(l);
-  const paths = ctx.tree.paths().filter(
-    (p) => !p.includes("node_modules/") && // Extensionless files are scripts as often as not (`scripts/setup-db`).
-    (TEXT_FILE.test(p) || NAMED_SCRIPT.test(baseOf4(p)) || !baseOf4(p).includes(".")) && !ctx.isTest(p) && !((isJs(p) || isPy(p)) && loaded.has(p)) && !["ignored", "lockfile", "snapshot", "test"].includes(classify(p))
-  );
-  if (paths.length > MAX_CORPUS_FILES) return `${paths.length} files could name it (max ${MAX_CORPUS_FILES})`;
-  ctx.tree.prefetch?.(paths);
-  const out2 = [];
-  let bytes = 0;
-  for (const p of paths) {
-    const text = ctx.tree.read(p);
-    if (text === null) continue;
-    bytes += text.length;
-    if (bytes > MAX_CORPUS_BYTES) return `over ${MAX_CORPUS_BYTES} bytes of files could name it`;
-    if (text.length > MAX_TEXT) {
-      if (isJs(p) || isPy(p) || NAMED_SCRIPT.test(baseOf4(p)) || !baseOf4(p).includes("."))
-        return `${p} is too large to scan`;
-      continue;
-    }
-    out2.push({ path: p, text });
-  }
-  return out2;
-}
-var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-function namesPath(text, from, path, workspaceRoots = []) {
-  if (text.includes(baseOf4(path))) return true;
-  const fromDir = dirOf5(from);
-  const segs = path.split("/");
-  for (let i2 = segs.length - 1; i2 >= 1; i2--) {
-    const dir = segs.slice(0, i2).join("/");
-    if (workspaceRoots.some((r) => r === dir || r.startsWith(`${dir}/`))) break;
-    const forms = [dir, baseOf4(dir)];
-    if (fromDir && dir.startsWith(`${fromDir}/`)) forms.push(dir.slice(fromDir.length + 1));
-    for (const f of forms) {
-      const rx = f.includes("/") ? new RegExp(`(^|[^\\w.-])(\\./)?${esc(f)}(?![\\w.-])`) : new RegExp(`(['"\`]|\\./|^|\\s)${esc(f)}(/|['"\`])`, "m");
-      if (rx.test(text)) return true;
-    }
-  }
-  return false;
-}
-function configInput(path, workspaceRoots) {
-  const name2 = baseOf4(path);
-  const dir = dirOf5(path);
-  if (path.split("/").some((s) => s.startsWith("."))) return "a dotfile or in a dot directory";
-  if (!dir) return "at the repo root";
-  if (workspaceRoots.includes(dir)) return `at the root of the workspace package ${dir}`;
-  if (CONFIG_NAME.some((r) => r.test(name2))) return "a tool config or build file by name";
-  if (/^action\.ya?ml$/.test(name2)) return "an action definition";
-  return null;
-}
-function loadedNamers(tree, map, tests, path, workspaceRoots = []) {
-  const loaded = /* @__PURE__ */ new Set();
-  for (const rec of map.tests.values())
-    for (const l of rec.loaded) if (!l.endsWith("/") && (isJs(l) || isPy(l))) loaded.add(l);
-  const candidates = [.../* @__PURE__ */ new Set([...loaded, ...tests])].filter((p) => p !== path);
-  tree.prefetch?.(candidates);
-  const namers = /* @__PURE__ */ new Set();
-  for (const c of candidates) {
-    const text = tree.read(c);
-    if (text !== null && namesPath(text, c, path, workspaceRoots)) namers.add(c);
-  }
-  return namers;
-}
-function nonCodeNarrowing(ctx) {
-  let mainProcess;
-  let texts;
-  const narrowWorkflow = (path, read) => {
-    const setup = ctx.setup;
-    if (!setup || !WORKFLOW2.test(path) || setup.workflows.includes(path)) return null;
-    const job = setup.texts.join("\n");
-    if (/\bworkflow_run\b/.test(job) || /action-download-artifact/.test(job)) return null;
-    if (/download-artifact/.test(job) && /\brun[-_]id\s*:/.test(job)) return null;
-    const sides = [read("old", path), read("new", path)];
-    if (/actions\/cache/.test(job) && sides.some((t) => t !== null && /actions\/cache(\/save)?@/.test(t)))
-      return null;
-    return `workflow ${path} defines none of this job's steps; only tests that read it run`;
-  };
-  const narrowData = (path) => {
-    if (!DATA_FILE.test(path) || path.startsWith(".github/")) return null;
-    if (configInput(path, ctx.workspaceRoots)) return null;
-    const dir = dirOf5(path);
-    const actionDir = ctx.tree.read(`${dir}/action.yml`) !== null || ctx.tree.read(`${dir}/action.yaml`) !== null;
-    if (actionDir && !ctx.setup) return null;
-    if (ctx.tree.read(".gitmodules") !== null) return null;
-    mainProcess ??= mainProcessReaders(ctx.tree);
-    if (mainProcess) return null;
-    texts ??= corpus(ctx);
-    if (typeof texts === "string") return null;
-    if (texts.some((t) => t.path !== path && namesPath(t.text, t.path, path, ctx.workspaceRoots)))
-      return null;
-    return "a data file no build, CI or config file names; only tests that read it run";
-  };
-  return (path, kind, read) => {
-    if (!ctx.readsAndChildren) return null;
-    if (kind === "ci") return narrowWorkflow(path, read);
-    if (kind === "unknown") return narrowData(path);
-    return null;
-  };
-}
-
 // ../engine/src/specs.ts
 var MAX_SPEC_SCAN_BYTES = 2 * 1024 * 1024;
 var MAX_CLAUSE = 8192;
@@ -16789,6 +16608,443 @@ function pySpecs(src) {
     }
   }
   return [...out2];
+}
+
+// ../engine/src/workflow-jobs.ts
+var import_yaml4 = __toESM(require_dist(), 1);
+var isObj3 = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
+var MAX_WORKFLOW_BYTES = 1024 * 1024;
+function parseWorkflow(text) {
+  if (text.length > MAX_WORKFLOW_BYTES) return null;
+  let doc;
+  try {
+    doc = (0, import_yaml4.parse)(text, { maxAliasCount: 1e3, uniqueKeys: true });
+  } catch {
+    return null;
+  }
+  if (!isObj3(doc) || !isObj3(doc.jobs)) return null;
+  const jobs = /* @__PURE__ */ Object.create(null);
+  for (const [k, v] of Object.entries(doc.jobs)) {
+    if (!isObj3(v) || !/^[A-Za-z_][\w-]*$/.test(k)) return null;
+    jobs[k] = v;
+  }
+  const top = /* @__PURE__ */ Object.create(null);
+  for (const [k, v] of Object.entries(doc)) if (k !== "jobs") top[k] = v;
+  return { top, jobs };
+}
+var SELECT_STEP = /(gate-action|rsyed94\/jiffy|tensile)/i;
+var needsOf = (job) => typeof job.needs === "string" ? [job.needs] : Array.isArray(job.needs) ? job.needs.map(String) : [];
+var has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+function testJobs(wf, job) {
+  const all = Object.keys(wf.jobs);
+  let start2;
+  let how;
+  if (job && has(wf.jobs, job)) {
+    start2 = [job];
+    how = `the job ${job}`;
+  } else {
+    start2 = all.filter((id) => {
+      const steps = wf.jobs[id].steps;
+      return Array.isArray(steps) && steps.some(
+        (s) => isObj3(s) && typeof s.uses === "string" && SELECT_STEP.test(s.uses) && isObj3(s.with) && s.with.phase === "select"
+      );
+    });
+    how = "the jobs running the selection step";
+    if (!start2.length) {
+      start2 = all;
+      how = "every job: none runs the selection step";
+    }
+  }
+  const ids = /* @__PURE__ */ new Set();
+  const queue = [...start2];
+  for (let grew = true; grew; ) {
+    while (queue.length) {
+      const id = queue.shift();
+      if (ids.has(id) || !has(wf.jobs, id)) continue;
+      ids.add(id);
+      queue.push(...needsOf(wf.jobs[id]));
+    }
+    grew = false;
+    for (const id of all) {
+      if (ids.has(id)) continue;
+      const text = JSON.stringify(wf.jobs[id]);
+      const whole = /toJSON\(\s*needs\s*\)|needs\s*\.\s*\*/.test(text) && needsOf(wf.jobs[id]).length > 0;
+      if (whole || [...ids].some((t) => {
+        const e = t.replace(/[-]/g, "\\-");
+        return new RegExp(`needs\\s*(\\.\\s*${e}\\b|\\[\\s*\\\\?['"]${e}\\\\?['"]\\s*\\])`).test(text);
+      })) {
+        queue.push(id);
+        grew = true;
+      }
+    }
+  }
+  return { ids, how };
+}
+function jobSlice(wf, ids) {
+  const jobs = /* @__PURE__ */ Object.create(null);
+  for (const id of [...ids].sort()) jobs[id] = wf.jobs[id];
+  return (0, import_yaml4.stringify)({ ...wf.top, jobs }, { aliasDuplicateObjects: false, lineWidth: 0 });
+}
+var CACHES = /actions\/cache|"(cache|enable-cache|cache-dependency-path|cache-dependency-glob)":/;
+var INERT_TOP = /* @__PURE__ */ new Set(["name", "run-name", "on", "true", "concurrency"]);
+var same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function workflowJobChange(oldText, newText, job) {
+  if (oldText === null || newText === null) return "the workflow was added or deleted";
+  const a = parseWorkflow(oldText);
+  const b = parseWorkflow(newText);
+  if (!a || !b) return "the workflow doesn't parse on both sides";
+  for (const k of /* @__PURE__ */ new Set([...Object.keys(a.top), ...Object.keys(b.top)]))
+    if (!INERT_TOP.has(k) && !same(a.top[k], b.top[k])) return `its ${k} changed, which every job inherits`;
+  const ta = testJobs(a, job);
+  const tb = testJobs(b, job);
+  const tests = /* @__PURE__ */ new Set([...ta.ids, ...tb.ids]);
+  const changed = [.../* @__PURE__ */ new Set([...Object.keys(a.jobs), ...Object.keys(b.jobs)])].filter((id) => !same(a.jobs[id], b.jobs[id])).sort();
+  const hit = changed.filter((id) => tests.has(id));
+  if (hit.length) return `the test job ${hit.join(", ")} changed`;
+  const testText = [...tests].map((id) => JSON.stringify(b.jobs[id] ?? a.jobs[id])).join("\n");
+  if (CACHES.test(testText)) {
+    for (const id of changed)
+      if (CACHES.test(JSON.stringify([a.jobs[id], b.jobs[id]])))
+        return `the job ${id} may write caches the test job restores`;
+  }
+  return { changed, tests: [...tests].sort(), how: tb.how };
+}
+
+// ../engine/src/narrow.ts
+var WORKFLOW2 = /^\.github\/workflows\/[^/]+\.ya?ml$/;
+var LOCAL_USES = /^[ \t]*-?[ \t]*uses:[ \t]*['"]?\.\/([^'"\s#]*)['"]?/gm;
+var DATA_FILE = /\.(json|jsonc|json5|jsonl|ndjson|ya?ml|toml|txt|csv|tsv|xml|html?|ini|properties|graphql|gql|log|po|pot)$/i;
+var SHELL_SCRIPT = /\.(sh|bash|zsh)$/i;
+var TOOL_DOT_DIR = /^\.(github|gitea|forgejo|gitlab|circleci|buildkite|drone|woodpecker|semaphore|azure\w*|husky|vscode|idea|devcontainer|changeset|yarn|pnpm\w*|npm|bun|deno|storybook|config|cargo|venv\w*|tox|nox|turbo|nx|next|nuxt|svelte-kit|vitest|jest|cache|docker|git|hg|svn|mvn|gradle|bundle|terraform|direnv|mise|asdf|devbox|wrangler|vercel|netlify|firebase|expo|angular|astro|swc|babel|parcel-cache|\w*_cache|env\w*|local|tmp|run|data)$/i;
+var INERT_CONFIG = /^\.?(eslint|oxlint|oxfmt|prettier|stylelint|biome|dprint|commitlint|markdownlint|cspell|typos|knip|syncpack|coderabbit|codecov|renovate|release-please)[\w.-]*\.(json|jsonc|json5|ya?ml|toml)$|^\.(eslint|oxlint|oxfmt|prettier|stylelint|markdownlint|cspell|typos)rc$|^\.(git|prettier|eslint|stylelint|oxfmt|markdownlint)ignore$|^(oxlint|eslint)-suppressions\.json$/;
+var toolOf = (name2) => /^\.?(eslint|oxlint|oxfmt|prettier|stylelint|biome|dprint|commitlint|markdownlint|cspell|typos|knip|syncpack|coderabbit|codecov|renovate|release-please)/.exec(
+  name2
+)?.[1] ?? null;
+var CONFIG_NAME = [
+  /^(Dockerfile|Containerfile|Makefile|GNUmakefile|makefile|justfile|Justfile|Taskfile|Procfile|Brewfile|Gemfile|Rakefile|Vagrantfile|Jenkinsfile|CMakeLists|BUILD|WORKSPACE|MODULE|Pipfile|MANIFEST)(\..*)?$/,
+  /\.(dockerfile|mk|cmake|bzl|bazel|nix)$/i,
+  /^(docker-)?compose([.-][\w.-]*)?\.ya?ml$/,
+  /(^|[.\-_])(config|conf|settings)\.\w+$/i,
+  /^(renovate|biome|deno|jsr|vercel|firebase|app|angular|project|workspace|rush|components|tsdoc|api-extractor|typedoc|cypress|nodemon|lefthook|import_map|importmap|pyrightconfig|manifest|codecov|environment|mkdocs|sonar-project|wrangler|netlify|fly|render|railway|now|package|bunfig|ruff|mypy|pylintrc|setup|tox|pytest|constraints|requirements)\b[\w.-]*$/i,
+  /\.code-workspace$/
+];
+var RUNNER_CONFIG = /(^|\/)(vite|vitest|jest|webpack|rollup|babel|rspack|rsbuild|esbuild|tsup|postcss|tailwind|svelte|astro|nuxt|next)\.(config|workspace)(\.[\w-]+)*\.[cm]?[jt]s(on)?$|(^|\/)\.babelrc(\.[cm]?js(on)?)?$/;
+var PKG_RUNNER_KEYS = /"(babel|globalSetup|globalTeardown|transform)"\s*:/;
+var TEXT_FILE = /\.([cm]?[jt]sx?|py|json|jsonc|json5|ya?ml|toml|txt|xml|html?|ini|cfg|properties|sh|bash|zsh|fish|ps1|bat|cmd|mk|just|rb|go|rs|java|kt|kts|gradle|php|pl|lua|swift|cs|scala|groovy|r|jl|vue|svelte|astro|mdx)$/i;
+var NAMED_SCRIPT = /^(Dockerfile|Containerfile|Makefile|GNUmakefile|makefile|justfile|Justfile|Taskfile|Rakefile|Procfile|Jenkinsfile)(\..*)?$/;
+var MAX_CORPUS_FILES = 3e4;
+var MAX_CORPUS_BYTES = 256 * 1024 * 1024;
+var MAX_TEXT = 2 * 1024 * 1024;
+var baseOf4 = (p) => p.slice(p.lastIndexOf("/") + 1);
+var dirOf5 = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+function normalize5(p) {
+  const out2 = [];
+  for (const s of p.split("/")) {
+    if (s === "" || s === ".") continue;
+    if (s === "..") {
+      if (!out2.length) return null;
+      out2.pop();
+    } else out2.push(s);
+  }
+  return out2.join("/");
+}
+function jobSetup(tree, workflow, job) {
+  const raw2 = tree.read(workflow);
+  if (raw2 === null) return null;
+  const wf = parseWorkflow(raw2);
+  const tests = wf ? testJobs(wf, job) : null;
+  const first = wf && tests ? jobSlice(wf, tests.ids) : raw2;
+  const workflows = /* @__PURE__ */ new Set([workflow]);
+  const actions = /* @__PURE__ */ new Set();
+  const texts = [];
+  const queue = [[workflow, first]];
+  while (queue.length) {
+    const [, text] = queue.shift();
+    texts.push(text);
+    for (const m of text.matchAll(LOCAL_USES)) {
+      const target = normalize5(m[1].replace(/@.*$/, ""));
+      if (target === null) continue;
+      if (WORKFLOW2.test(target)) {
+        if (workflows.has(target)) continue;
+        workflows.add(target);
+        const t = tree.read(target);
+        if (t !== null) queue.push([target, t]);
+      } else {
+        if (actions.has(target)) continue;
+        actions.add(target);
+        const prefix = target ? `${target}/` : "";
+        const t = tree.read(`${prefix}action.yml`) ?? tree.read(`${prefix}action.yaml`);
+        if (t !== null) queue.push([target, t]);
+      }
+    }
+  }
+  return {
+    running: workflow,
+    ...tests && { jobs: [...tests.ids].sort() },
+    workflows: [...workflows].sort(),
+    actions: [...actions].sort(),
+    texts
+  };
+}
+function jobActionFile(setup, path) {
+  for (const a of setup.actions) if (a === "" || path === a || path.startsWith(`${a}/`)) return a || ".";
+  return null;
+}
+var MAIN_PROCESS_KEY = /\b(globalSetup|globalTeardown|transform|transformers|preprocessors?|testEnvironment|resolver|snapshotResolver|setupNodeEvents|plugins|presets?)['"]?\s*:/;
+var MAX_MAIN_PROCESS_FILES = 2e3;
+function withoutCoverage(text) {
+  let out2 = text;
+  for (let guard = 0; guard < 20; guard++) {
+    const m = /\bcoverage\s*:\s*\{/.exec(out2);
+    if (!m) break;
+    let depth = 0;
+    let end = -1;
+    let quote = null;
+    for (let i2 = m.index + m[0].length - 1; i2 < out2.length; i2++) {
+      const c = out2[i2];
+      if (quote) {
+        if (c === "\\") i2++;
+        else if (c === quote) quote = null;
+        else if (c === "\n" && quote !== "`") break;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === "`") quote = c;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) {
+        end = i2;
+        break;
+      }
+    }
+    if (end < 0 || MAIN_PROCESS_KEY.test(out2.slice(m.index + m[0].length, end))) break;
+    out2 = out2.slice(0, m.index) + out2.slice(end + 1);
+  }
+  return out2;
+}
+var SLASH_COMMENT = /^[ \t]*\/\/.*$/gm;
+var HASH_COMMENT = /^[ \t]*#(?!!).*$/gm;
+var SLASH_FILE = /\.[cm]?[jt]sx?$/i;
+var HASH_FILE = /\.(py|sh|bash|zsh|ya?ml|toml|rb|mk)$/i;
+function scanText(path, text) {
+  let out2 = SLASH_FILE.test(path) ? text.replace(SLASH_COMMENT, "") : HASH_FILE.test(path) ? text.replace(HASH_COMMENT, "") : text;
+  if (RUNNER_CONFIG.test(path)) out2 = withoutCoverage(out2);
+  return out2;
+}
+function mainProcessTexts(tree) {
+  const paths = tree.paths().filter((p) => !p.includes("node_modules/"));
+  const configs = paths.filter((p) => RUNNER_CONFIG.test(p));
+  const pkgs = paths.filter((p) => p === "package.json" || p.endsWith("/package.json"));
+  tree.prefetch?.([...configs, ...pkgs]);
+  const roots = [...configs];
+  for (const p of pkgs) {
+    const src = tree.read(p);
+    if (src !== null && PKG_RUNNER_KEYS.test(src)) roots.push(p);
+  }
+  const files = new Set(paths);
+  const seen = new Set(roots);
+  const queue = [...roots];
+  const texts = [];
+  const ctx = { tree };
+  while (queue.length) {
+    const p = queue.shift();
+    const raw2 = tree.read(p);
+    if (raw2 === null) return `${p} can't be read`;
+    if (raw2.length > MAX_TEXT) return `${p} is too large to scan`;
+    const text = scanText(p, raw2);
+    texts.push({ path: p, text });
+    const next = [];
+    if (isJs(p) || isPy(p)) {
+      const specs = isPy(p) ? pySpecs(text) : jsSpecs(text);
+      if (specs === "unreadable") return `${p} is too large to scan`;
+      for (const s of specs) {
+        const r = resolveSpecAll(ctx, p, s);
+        if (Array.isArray(r)) next.push(...r);
+      }
+    }
+    for (const m of text.matchAll(/['"`](?:<rootDir>\/|\.{1,2}\/)([^'"`\s*{}]+)['"`]/g)) {
+      if (!MAIN_PROCESS_KEY.test(text.slice(Math.max(0, m.index - 160), m.index))) continue;
+      const rel = m[0].slice(1, -1).replace(/^<rootDir>\//, "./");
+      for (const from of [dirOf5(p), ""]) {
+        const n = normalize5(from ? `${from}/${rel}` : rel);
+        if (n === null) continue;
+        for (const c of [n, ...[".ts", ".js", ".mjs", ".cjs", ".mts", ".cts"].map((e) => n + e)])
+          if (files.has(c) && (isJs(c) || isPy(c))) next.push(c);
+      }
+    }
+    for (const n of next) {
+      if (seen.has(n) || n.includes("node_modules/")) continue;
+      seen.add(n);
+      if (seen.size > MAX_MAIN_PROCESS_FILES)
+        return `runner configs load over ${MAX_MAIN_PROCESS_FILES} repo files`;
+      queue.push(n);
+    }
+  }
+  return { texts };
+}
+function mainProcessNamer(mp, path, workspaceRoots) {
+  if (typeof mp === "string") return mp;
+  const hit = mp.texts.find((t) => t.path !== path && namesPath(t.text, t.path, path, workspaceRoots));
+  return hit ? `${hit.path} (run by the test runner's main process) names it` : null;
+}
+function corpus(ctx) {
+  const loaded = /* @__PURE__ */ new Set();
+  for (const rec of ctx.map.tests.values()) for (const l of rec.loaded) loaded.add(l);
+  const paths = ctx.tree.paths().filter(
+    (p) => !p.includes("node_modules/") && // Extensionless files are scripts as often as not (`scripts/setup-db`).
+    (TEXT_FILE.test(p) || NAMED_SCRIPT.test(baseOf4(p)) || !baseOf4(p).includes(".")) && !ctx.isTest(p) && !((isJs(p) || isPy(p)) && loaded.has(p)) && !["ignored", "lockfile", "snapshot", "test"].includes(classify(p))
+  );
+  if (paths.length > MAX_CORPUS_FILES) return `${paths.length} files could name it (max ${MAX_CORPUS_FILES})`;
+  ctx.tree.prefetch?.(paths);
+  const out2 = [];
+  let bytes = 0;
+  for (const p of paths) {
+    const text = ctx.tree.read(p);
+    if (text === null) continue;
+    bytes += text.length;
+    if (bytes > MAX_CORPUS_BYTES) return `over ${MAX_CORPUS_BYTES} bytes of files could name it`;
+    if (text.length > MAX_TEXT) {
+      if (isJs(p) || isPy(p) || NAMED_SCRIPT.test(baseOf4(p)) || !baseOf4(p).includes("."))
+        return `${p} is too large to scan`;
+      continue;
+    }
+    out2.push({ path: p, text: scanText(p, text) });
+  }
+  return out2;
+}
+var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function namesPath(text, from, path, workspaceRoots = []) {
+  if (text.includes(baseOf4(path))) return true;
+  const fromDir = dirOf5(from);
+  const segs = path.split("/");
+  for (let i2 = segs.length - 1; i2 >= 1; i2--) {
+    const dir = segs.slice(0, i2).join("/");
+    if (workspaceRoots.some((r) => r === dir || r.startsWith(`${dir}/`))) break;
+    const forms = [dir, baseOf4(dir)];
+    if (fromDir && dir.startsWith(`${fromDir}/`)) forms.push(dir.slice(fromDir.length + 1));
+    for (const f of forms) if (formRx(f).test(text)) return true;
+  }
+  return false;
+}
+var formRxs = /* @__PURE__ */ new Map();
+function formRx(f) {
+  let rx = formRxs.get(f);
+  if (!rx) {
+    rx = f.includes("/") || f.startsWith(".") ? new RegExp(`(^|[^\\w.-])(\\./)?${esc(f)}(?![\\w.-])`) : new RegExp(`(['"\`]|\\./|^|\\s)${esc(f)}(/|['"\`])`, "m");
+    if (formRxs.size > 1e4) formRxs.clear();
+    formRxs.set(f, rx);
+  }
+  return rx;
+}
+function configInput(path, workspaceRoots) {
+  const name2 = baseOf4(path);
+  const dir = dirOf5(path);
+  if (name2.startsWith(".")) return "a dotfile";
+  const tool = path.split("/").slice(0, -1).find((s) => TOOL_DOT_DIR.test(s));
+  if (tool) return `in ${tool}/, a directory tools read by convention`;
+  if (!dir) return "at the repo root";
+  if (workspaceRoots.includes(dir)) return `at the root of the workspace package ${dir}`;
+  if (CONFIG_NAME.some((r) => r.test(name2))) return "a tool config or build file by name";
+  if (/^action\.ya?ml$/.test(name2)) return "an action definition";
+  return null;
+}
+function loadedNamers(tree, map, tests, path, workspaceRoots = []) {
+  const loaded = /* @__PURE__ */ new Set();
+  for (const rec of map.tests.values())
+    for (const l of rec.loaded) if (!l.endsWith("/") && (isJs(l) || isPy(l))) loaded.add(l);
+  const candidates = [.../* @__PURE__ */ new Set([...loaded, ...tests])].filter((p) => p !== path);
+  tree.prefetch?.(candidates);
+  const namers = /* @__PURE__ */ new Set();
+  for (const c of candidates) {
+    const text = tree.read(c);
+    if (text !== null && namesPath(text, c, path, workspaceRoots)) namers.add(c);
+  }
+  return namers;
+}
+function coupled(job, other) {
+  if (other === null)
+    return /\bworkflow_run\b/.test(job) || /action-download-artifact/.test(job) || /download-artifact/.test(job) && /\brun[-_]id\s*:/.test(job);
+  return /actions\/cache/.test(job) && /actions\/cache(\/save)?@/.test(other);
+}
+function nonCodeNarrowing(ctx) {
+  let mainProcess;
+  let texts;
+  const narrowWorkflow = (path, read) => {
+    const setup = ctx.setup;
+    if (!setup || !WORKFLOW2.test(path)) return null;
+    const job = setup.texts.join("\n");
+    if (coupled(job, null)) return null;
+    if (path === setup.running && setup.jobs) {
+      const c = workflowJobChange(read("old", path), read("new", path), ctx.job);
+      if (typeof c === "string") return null;
+      return `the running workflow's change leaves its test jobs (${c.tests.join(", ")}; ${c.how}) alone, changing ${c.changed.length ? c.changed.join(", ") : "only its triggers or name"}; only tests that read it run`;
+    }
+    if (setup.workflows.includes(path)) return null;
+    if ([read("old", path), read("new", path)].some((t) => t !== null && coupled(job, t))) return null;
+    return `workflow ${path} defines none of this job's steps; only tests that read it run`;
+  };
+  let isolated;
+  const otherWorkflow = (p) => !!ctx.setup && WORKFLOW2.test(p) && !ctx.setup.workflows.includes(p);
+  let path0 = "";
+  const unnamedDot = /* @__PURE__ */ new Map();
+  const elsewhere = (namer, all) => {
+    const segs = namer.split("/");
+    const dot = segs.findIndex((x) => x.startsWith("."));
+    if (dot >= 0 && dot < segs.length - 1 && !configInput(namer, ctx.workspaceRoots)) {
+      let unrun = unnamedDot.get(namer);
+      if (unrun === void 0) {
+        const d = segs.slice(0, dot + 1).join("/") + "/";
+        const outside = all.some((t) => !t.path.startsWith(d) && namesPath(t.text, t.path, namer));
+        const setupNames = (ctx.setup?.texts ?? []).some((t) => namesPath(t, "", namer));
+        unnamedDot.set(namer, unrun = !outside && !setupNames);
+      }
+      if (unrun) return true;
+    }
+    isolated ??= !!ctx.setup && !coupled(ctx.setup.texts.join("\n"), null);
+    if (!isolated) return false;
+    if (otherWorkflow(namer))
+      return !coupled(ctx.setup.texts.join("\n"), all.find((t) => t.path === namer).text);
+    if (namer === ctx.setup.running && ctx.setup.jobs)
+      return !namesPath(ctx.setup.texts[0], namer, path0);
+    if (!namer.startsWith(".github/") || WORKFLOW2.test(namer) || namer.startsWith(".github/actions/"))
+      return false;
+    if (ctx.setup.texts.some((t) => namesPath(t, ctx.setup.workflows[0], namer))) return false;
+    return all.every(
+      (t) => t.path === namer || !namesPath(t.text, t.path, namer) || otherWorkflow(t.path) && !coupled(ctx.setup.texts.join("\n"), t.text)
+    );
+  };
+  const narrowData = (path) => {
+    const name2 = baseOf4(path);
+    const inert = INERT_CONFIG.test(name2);
+    const script = SHELL_SCRIPT.test(name2);
+    if (!(DATA_FILE.test(name2) || inert || script) || path.startsWith(".github/")) return null;
+    if (!inert && configInput(path, ctx.workspaceRoots)) return null;
+    const dir = dirOf5(path);
+    const actionDir = ctx.tree.read(`${dir ? `${dir}/` : ""}action.yml`) !== null || ctx.tree.read(`${dir ? `${dir}/` : ""}action.yaml`) !== null;
+    if (actionDir && !ctx.setup) return null;
+    if (ctx.tree.read(".gitmodules") !== null) return null;
+    mainProcess ??= mainProcessTexts(ctx.tree);
+    if (mainProcessNamer(mainProcess, path, ctx.workspaceRoots)) return null;
+    if (inert) {
+      const tool = toolOf(name2);
+      if (typeof mainProcess === "string") return null;
+      if (tool && mainProcess.texts.some((t) => t.text.toLowerCase().includes(tool))) return null;
+    }
+    texts ??= corpus(ctx);
+    if (typeof texts === "string") return null;
+    const namers = texts.filter(
+      (t) => t.path !== path && namesPath(t.text, t.path, path, ctx.workspaceRoots)
+    );
+    path0 = path;
+    if (namers.some((t) => !elsewhere(t.path, texts))) return null;
+    if (inert) return "a lint, format or VCS config no runner config names; only tests that read it run";
+    if (script) return "a shell script no workflow, script or build file names; only tests that read it run";
+    return "a data file no build, CI or config file names; only tests that read it run";
+  };
+  return (path, kind, read) => {
+    if (!ctx.readsAndChildren) return null;
+    if (kind === "ci") return narrowWorkflow(path, read);
+    if (kind === "unknown") return narrowData(path);
+    return null;
+  };
 }
 
 // ../engine/src/select.ts
@@ -17406,7 +17662,7 @@ function packageFallback(ctx) {
 }
 
 // ../engine/src/plan.ts
-var PLAN_VERSION = "plan@3";
+var PLAN_VERSION = "plan@4";
 var DEFAULT_BOUNDS = { maxCommits: 200, maxAgeDays: 14, maxFiles: 2e3 };
 var ms = (a, b) => Math.round((b - a) * 10) / 10;
 function revOk(repo, rev) {
@@ -17484,7 +17740,7 @@ function staticSpecs(path, src) {
   return isPy(path) ? pySpecs(src) : jsSpecs(src);
 }
 function staticReach(tree, changed, isTest, maxFiles, workspaces) {
-  const code3 = tree.paths().filter((p) => (isJs(p) || isPy(p)) && !p.includes("node_modules/"));
+  const code3 = tree.paths().filter((p) => (isJs(p) || isPy(p) || VUE_FILE.test(p)) && !p.includes("node_modules/"));
   if (code3.length > maxFiles)
     return {
       tests: /* @__PURE__ */ new Map(),
@@ -17494,6 +17750,7 @@ function staticReach(tree, changed, isTest, maxFiles, workspaces) {
     };
   tree.prefetch?.(code3);
   const ctx = { tree, ...workspaces && { workspaces } };
+  const files = new Set(code3);
   const byName = /* @__PURE__ */ new Map();
   for (const f of code3)
     for (const n of names(f)) {
@@ -17521,6 +17778,17 @@ function staticReach(tree, changed, isTest, maxFiles, workspaces) {
         for (const t of r) link(t, c);
         continue;
       }
+      if (VUE_FILE.test(spec)) {
+        if (spec.startsWith(".")) {
+          const p = normalizePath(`${c.slice(0, Math.max(0, c.lastIndexOf("/")))}/${spec}`);
+          if (p !== null && files.has(p)) link(p, c);
+        } else {
+          const name2 = spec.slice(spec.lastIndexOf("/") + 1);
+          for (const t of byName.get(name2.replace(/\.vue$/, "")) ?? [])
+            if (t.endsWith(`/${name2}`)) link(t, c);
+        }
+        continue;
+      }
       const last = (isPy(c) ? spec.split(".") : spec.replace(/\/+$/, "").split("/")).at(-1) ?? "";
       const stem = last.replace(/^#/, "").replace(/\.[cm]?[jt]sx?$/, "");
       for (const t of byName.get(stem) ?? []) if (mayBe(r, spec, t)) link(t, c);
@@ -17543,6 +17811,17 @@ function staticReach(tree, changed, isTest, maxFiles, workspaces) {
   for (const [f, from] of reach) if (isTest(f)) tests.set(f, from);
   const orphans = changed.filter((f) => !importers.get(f)?.size);
   return { tests, exhausted: null, parsed: code3.length, orphans };
+}
+function normalizePath(p) {
+  const out2 = [];
+  for (const s of p.split("/")) {
+    if (s === "" || s === ".") continue;
+    if (s === "..") {
+      if (!out2.length) return null;
+      out2.pop();
+    } else out2.push(s);
+  }
+  return out2.join("/");
 }
 var SPAWN = new RegExp(
   [
@@ -17644,6 +17923,47 @@ function opaqueRunnerConfigs(tree) {
 }
 var FIXTURE_DIR = /(^|\/)(tests?|__tests__|fixtures?|__fixtures__|testdata|test-data|__mocks__|__snapshots__)\/|^specs?\//i;
 var POSSIBLE_TEST = /(^|\/)(__tests__|tests?|specs?)\/|(^|[./_-])(test|spec)\.[cm]?[jt]sx?$|(^|\/)test[_-][^/]*\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.py$/;
+function testHelpers(tree, files, o) {
+  const out2 = /* @__PURE__ */ new Map();
+  const added = [];
+  const named = !!o.map && o.map.tests.size > 0 && [...o.map.tests.keys(), ...mapAlwaysRun(o.map) ?? ["?"]].every((t) => classify(t) === "test");
+  for (const f of files) {
+    if (o.inScope && !o.inScope(f.path)) {
+      out2.set(f.path, "outside the job's test paths: not one of its tests");
+      continue;
+    }
+    if (!o.map || !o.mapped || TEST_FILE.test(f.path)) continue;
+    if (f.status !== "added") {
+      out2.set(f.path, "at the map commit but not in the map: the runner did not collect it, so a helper");
+      continue;
+    }
+    if (named && !DEFAULT_COLLECTED.test(f.path)) added.push(f.path);
+  }
+  if (added.length) {
+    const code3 = tree.paths().filter((p) => (isJs(p) || isPy(p) || VUE_FILE.test(p)) && !p.includes("node_modules/"));
+    if (code3.length > o.maxFiles) return out2;
+    const ctx = { tree, ...o.workspaces && { workspaces: o.workspaces } };
+    const stems2 = new Map(added.map((p) => [p, p.slice(p.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "")]));
+    tree.prefetch?.(code3);
+    const imported = /* @__PURE__ */ new Set();
+    for (const c of code3) {
+      const src = tree.read(c);
+      if (src === null || ![...stems2.values()].some((s) => src.includes(s))) continue;
+      const specs = staticSpecs(c, src);
+      if (specs === "unreadable") continue;
+      for (const s of specs) {
+        const r = resolveSpecAll(ctx, c, s);
+        if (Array.isArray(r)) {
+          for (const t of r) if (stems2.has(t) && t !== c) imported.add(t);
+        }
+      }
+    }
+    for (const p of added)
+      if (imported.has(p)) out2.set(p, "new, without a test name, and imported: a test helper");
+  }
+  return out2;
+}
+var DEFAULT_COLLECTED = /(^|\/)(__tests__|test)\/|(^|\/)test([-_.][^/]*)?\.[cm]?[jt]sx?$|[-_]test\.[cm]?[jt]sx?$/;
 function headTests(tree) {
   return tree.paths().filter((p) => TEST_FILE.test(p) && !p.includes("node_modules/"));
 }
@@ -17712,18 +18032,20 @@ function planSelection(input) {
   for (const t of input.allTests ?? [])
     if (headFiles.has(t) && (knownTests.has(t) || (isJs(t) || isPy(t)) && POSSIBLE_TEST.test(t)))
       universeSet.add(t);
-  const setup = input.workflow ? jobSetup(tree, input.workflow) : null;
+  const setup = input.workflow ? jobSetup(tree, input.workflow, input.job) : null;
   const narrow = input.map && mapInfo ? nonCodeNarrowing({
     tree,
     map: input.map,
     readsAndChildren: mapInfo.reads && mapInfo.children,
     setup,
+    job: input.job ?? null,
     workspaceRoots,
     isTest: (p) => knownTests.has(p) || classify(p) === "test"
   }) : void 0;
   const changes = changesFromGit(repo, from, head, {
     knownTests,
     tree,
+    ...input.inScope && { inScope: input.inScope },
     strictWorkflows: true,
     // Lockfiles narrow only with records that list reads and a known job setup that sets no install flags (a
     // `--shamefully-hoist` or `npm_config_node_linker` there hoists what the lockfile files says is isolated).
@@ -17747,7 +18069,9 @@ function planSelection(input) {
   const reasons = [];
   for (const t of changes.runAll) reasons.push(`changed ${t.path} (${t.reason})`);
   const policy = new Set(input.policyFiles ?? []);
-  for (const f of changes.files) if (policy.has(f.path)) reasons.push(`changed ${f.path} (selection policy)`);
+  const ownNarrowed = (f) => f.path === input.workflow && f.kind === "ci" && f.fileLevel === "read" && !f.runAll;
+  for (const f of changes.files)
+    if (policy.has(f.path) && !ownNarrowed(f)) reasons.push(`changed ${f.path} (selection policy)`);
   if (setup)
     for (const f of changes.files) {
       const a = jobActionFile(setup, f.path);
@@ -17766,9 +18090,23 @@ function planSelection(input) {
           );
     }
   }
-  for (const f of changes.files)
-    if (f.status !== "deleted" && (isJs(f.path) || isPy(f.path)) && POSSIBLE_TEST.test(f.path) && !universeSet.has(f.path) && !f.path.includes("node_modules/"))
-      reasons.push(`changed ${f.path}: it may be a test the runner collects by its own names`);
+  const maybeTests = changes.files.filter(
+    (f) => f.status !== "deleted" && (isJs(f.path) || isPy(f.path)) && POSSIBLE_TEST.test(f.path) && !universeSet.has(f.path) && !f.path.includes("node_modules/")
+  );
+  const helpers = maybeTests.length ? testHelpers(tree, maybeTests, {
+    map: input.map,
+    mapped: !!mapInfo,
+    inScope: input.inScope,
+    knownTests,
+    universe: universeSet,
+    workspaces: graph,
+    maxFiles: input.staticMaxFiles ?? 5e4
+  }) : /* @__PURE__ */ new Map();
+  for (const f of maybeTests) {
+    const why = helpers.get(f.path);
+    if (why) f.note = [f.note, why].filter(Boolean).join("; ");
+    else reasons.push(`changed ${f.path}: it may be a test the runner collects by its own names`);
+  }
   const universe = [...universeSet].filter(inScope).sort();
   if (reasons.length) return everything(from, basis, reasons, { map: mapInfo, changes, universe });
   const empty = { meta: {}, tests: /* @__PURE__ */ new Map() };
@@ -17796,7 +18134,7 @@ function planSelection(input) {
   const t3 = performance.now();
   timings.selectMs = ms(t2, t3);
   const changedCode = changes.files.filter(
-    (f) => f.status !== "deleted" && ((f.kind === "source" || f.kind === "test") && (isJs(f.path) || isPy(f.path)) || !f.runAll && f.kind !== "lockfile" && f.kind !== "ignored" && f.kind !== "ci" && !!f.packageScope)
+    (f) => f.status !== "deleted" && ((f.kind === "source" || f.kind === "test") && (isJs(f.path) || isPy(f.path) || VUE_FILE.test(f.path)) || !f.runAll && f.kind !== "lockfile" && f.kind !== "ignored" && f.kind !== "ci" && !!f.packageScope)
   ).map((f) => f.path);
   if (changedCode.length) {
     const isTest = (p) => universeSet.has(p) || classify(p, { knownTests }) === "test";
@@ -17816,7 +18154,9 @@ function planSelection(input) {
       git(repo, ["ls-tree", "-r", "-z", "--name-only", mapInfo.commit]).split("\0").filter(Boolean)
     );
     for (const [t, rec] of input.map.tests) {
-      const generated = [...rec.loaded].filter((l) => !l.endsWith("/") && !tracked.has(l));
+      const generated = [...rec.loaded].filter(
+        (l) => !l.endsWith("/") && !tracked.has(l) && classify(l) !== "snapshot"
+      );
       if (generated.length && universeSet.has(t))
         add2(t, { kind: "module", files: generated.slice(0, 5).sort() });
     }
@@ -18244,7 +18584,7 @@ function parseInputs(env) {
 }
 
 // src/matrix.ts
-var same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+var same2 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function parseMatrix(text) {
   const m = JSON.parse(text);
   if (!m || typeof m !== "object" || Array.isArray(m)) throw new Error("matrix must be a JSON object");
@@ -18257,13 +18597,13 @@ function expandMatrix(m) {
   let combos = axes.length ? [{}] : [];
   for (const [k, vs] of axes) combos = combos.flatMap((c) => vs.map((v) => ({ ...c, [k]: v })));
   const excludes = m.exclude ?? [];
-  combos = combos.filter((c) => !excludes.some((e) => Object.entries(e).every(([k, v]) => same(c[k], v))));
+  combos = combos.filter((c) => !excludes.some((e) => Object.entries(e).every(([k, v]) => same2(c[k], v))));
   const axisNames = new Set(axes.map(([k]) => k));
   const originals = combos.map((c) => ({ ...c }));
   for (const inc of m.include ?? []) {
     let matched = false;
     originals.forEach((orig, i2) => {
-      if (Object.entries(inc).every(([k, v]) => !axisNames.has(k) || same(orig[k], v))) {
+      if (Object.entries(inc).every(([k, v]) => !axisNames.has(k) || same2(orig[k], v))) {
         Object.assign(combos[i2], inc);
         matched = true;
       }
@@ -18413,10 +18753,10 @@ var LIMITS = {
   /** One test (or step) longer than this is a clock error. */
   durationMs: 24 * 3600 * 1e3
 };
-var isObj3 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var isObj4 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 function canonicalJson(v) {
   if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
-  if (isObj3(v))
+  if (isObj4(v))
     return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(",")}}`;
   return JSON.stringify(v ?? null);
 }
@@ -18442,7 +18782,7 @@ var strList = (v, what) => {
   return v;
 };
 function parseLanding(v) {
-  if (!isObj4(v)) throw new Error("the landing mode is not an object");
+  if (!isObj5(v)) throw new Error("the landing mode is not an object");
   if (v.mode !== "queue" && v.mode !== "no_queue" && v.mode !== "unknown")
     throw new Error(`unknown landing mode ${JSON.stringify(v.mode)}`);
   if (typeof v.defaultBranch !== "string" || !v.defaultBranch)
@@ -18460,7 +18800,7 @@ function parseLanding(v) {
 }
 var MAX_INPUT_FILES = 5e4;
 var DAY = /^\d{4}-\d{2}-\d{2}$/;
-var isObj4 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var isObj5 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 var utcDay = (ms2) => new Date(ms2).toISOString().slice(0, 10);
 function validDay(s) {
   return typeof s === "string" && DAY.test(s) && utcDay(Date.parse(`${s}T00:00:00Z`)) === s;
@@ -18478,8 +18818,8 @@ function historyText(h) {
 }
 var inputDigest = (text) => sha256(text);
 function parseLedgerInputs(v) {
-  if (!isObj4(v) || !validDay(v.until)) throw new Error("the ledger inputs have no valid until day");
-  if (!isObj4(v.durations)) throw new Error("the ledger inputs have no durations object");
+  if (!isObj5(v) || !validDay(v.until)) throw new Error("the ledger inputs have no valid until day");
+  if (!isObj5(v.durations)) throw new Error("the ledger inputs have no durations object");
   if (!Array.isArray(v.history)) throw new Error("the ledger inputs have no history list");
   const files = Object.keys(v.durations);
   if (files.length > MAX_INPUT_FILES || v.history.length > MAX_INPUT_FILES)
@@ -18493,7 +18833,7 @@ function parseLedgerInputs(v) {
   }
   const history = [];
   for (const h of v.history) {
-    if (!isObj4(h) || typeof h.file !== "string" || !h.file || typeof h.failedAt !== "string")
+    if (!isObj5(h) || typeof h.file !== "string" || !h.file || typeof h.failedAt !== "string")
       throw new Error("a ledger history entry is not {file, failedAt}");
     history.push({ file: h.file, failedAt: h.failedAt });
   }
@@ -21375,7 +21715,7 @@ function inputRecord(path, until) {
   }
   return until ? { source: "ledger", sha256: inputDigest(text), entries, until } : { source: "file", sha256: inputDigest(text), entries };
 }
-var MAX_WORKFLOW_BYTES = 1024 * 1024;
+var MAX_WORKFLOW_BYTES2 = 1024 * 1024;
 function checkNames(env, inputs) {
   const job = env.GITHUB_JOB ?? "";
   if (!inputs.workflow || !job) return null;
@@ -21385,7 +21725,7 @@ function checkNames(env, inputs) {
     try {
       const p = resolve6(dir, inputs.workflow);
       const text = readFileSync9(p);
-      if (text.length > MAX_WORKFLOW_BYTES) return null;
+      if (text.length > MAX_WORKFLOW_BYTES2) return null;
       return jobCheckNames(text.toString("utf8"), job);
     } catch {
     }
